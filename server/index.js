@@ -27,8 +27,13 @@ const io = new Server(server, {
   allowRequest: (req, callback) => {
     if (!ALLOWED_ORIGINS.length) return callback(null, true);
     const origin = req.headers.origin;
-    // Origin 헤더가 없는 요청(같은 origin 페이지·헬스체크 등)은 허용
-    callback(null, !origin || ALLOWED_ORIGINS.includes(origin));
+    if (!origin) return callback(null, true); // Origin 없는 요청(헬스체크 등)
+    // 서버가 직접 서빙한 페이지(같은 host)는 목록과 무관하게 항상 허용 —
+    // 브라우저는 same-origin WebSocket에도 Origin을 붙이므로 이 예외가 없으면 자기 자신이 차단됨
+    try {
+      if (new URL(origin).host === req.headers.host) return callback(null, true);
+    } catch (e) { /* 이상한 Origin은 목록 검사로 */ }
+    callback(null, ALLOWED_ORIGINS.includes(origin));
   }
 });
 

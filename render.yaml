@@ -9,7 +9,7 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
-      # 클라이언트를 이 서버가 직접 서빙하므로 CORS는 기본(전체 허용)이어도 안전하지만,
-      # GitHub Pages에서도 서빙할 거라면 그 주소를 지정:
+      # 같은 host(이 서버가 직접 서빙한 페이지)는 코드에서 항상 허용됨.
+      # 이 목록은 "다른 곳에서 서빙되는 클라이언트"용 (예: GitHub Pages)
       - key: ALLOWED_ORIGINS
         value: https://qhrjstlf061.github.io

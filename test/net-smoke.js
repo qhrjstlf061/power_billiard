@@ -221,8 +221,14 @@ async function startServer() {
     extraHeaders: { origin: "http://allowed.example" }
   });
   await once(good, "connect");
+  // 같은 origin(서버가 직접 서빙한 페이지)은 목록에 없어도 항상 허용돼야 함
+  const sameOrigin = io(`http://localhost:${PORT2}`, {
+    transports: ["polling"], reconnection: false,
+    extraHeaders: { origin: `http://localhost:${PORT2}` }
+  });
+  await once(sameOrigin, "connect");
   cors.kill();
-  log("17. CORS 화이트리스트 OK — 허용 안 된 origin 차단, 허용 origin 연결");
+  log("17. CORS 화이트리스트 OK — 차단·허용 목록·same-origin 예외 모두 정상");
 
   /* ========== B2: 공개 방 목록 + 빠른 대전 ========== */
   // 공개 방은 목록에 뜨고, 비공개 방은 안 뜸
