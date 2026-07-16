@@ -940,11 +940,28 @@ const Game = {
       && !this.isMyTurn() && !!this.chars[this.myIdx] && !this.chars[this.myIdx].walk;
   },
 
-  roamAllowedPos(x, z) {
+  roamAllowedPos(x, z, fromX, fromZ) {
     const R = this.ROAM;
     if (Math.abs(x) > R.floorX || Math.abs(z) > R.floorZ) return false; // 바닥 밖
     if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) return false; // 테이블 안
+    // F2: 상대 캐릭터와 겹침 방지 — 단, 이미 겹쳐 있으면 멀어지는 이동은 허용 (끼임 방지)
+    const other = this.chars[1 - this.myIdx];
+    if (other && other.group.visible) {
+      const op = other.group.position;
+      const d = Math.hypot(x - op.x, z - op.z);
+      if (d < 1.4) {
+        const dPrev = fromX !== undefined ? Math.hypot(fromX - op.x, fromZ - op.z) : Infinity;
+        if (d <= dPrev) return false;
+      }
+    }
     return true;
+  },
+
+  // F2: 가상 조이스틱 초기화 (updateFreeRoam에서 사용)
+  resetJoy() {
+    this.joy = { f: 0, r: 0 };
+    const knob = document.getElementById("joy-knob");
+    if (knob) knob.style.transform = "translate(-50%,-50%)";
   },
 
   updateFreeRoam(dt) {
@@ -958,16 +975,31 @@ const Game = {
       this._roamHintT = (this._roamHintT || 0) + dt;
       if (this._roamHintT > 3) {
         this._roamHintShown = true;
-        this.showToast("⌨️ 상대 턴 — WASD로 당구장을 돌아다닐 수 있어요!");
+        this.showToast(this.isTouch
+          ? "🕹️ 상대 턴 — 조이스틱으로 당구장을 돌아다닐 수 있어요!"
+          : "⌨️ 상대 턴 — WASD로 당구장을 돌아다닐 수 있어요!");
+      }
+    }
+
+    // F2: 모바일 가상 조이스틱 표시/숨김 (돌아다닐 수 있을 때만)
+    const joyEl = document.getElementById("joystick");
+    if (joyEl) {
+      const show = can && this.isTouch;
+      if (show !== this._joyShown) {
+        this._joyShown = show;
+        joyEl.style.display = show ? "block" : "none";
+        if (!show) this.resetJoy();
       }
     }
 
     const k = this.keys || {};
-    const inF = (k.f ? 1 : 0) - (k.b ? 1 : 0); // 앞/뒤 (카메라 기준)
-    const inR = (k.r ? 1 : 0) - (k.l ? 1 : 0); // 오른쪽/왼쪽
+    const joy = this.joy || { f: 0, r: 0 };
+    const inF = (k.f ? 1 : 0) - (k.b ? 1 : 0) + joy.f; // 앞/뒤 (카메라 기준)
+    const inR = (k.r ? 1 : 0) - (k.l ? 1 : 0) + joy.r; // 오른쪽/왼쪽
+    const inMag = Math.hypot(inF, inR);
     let moving = false;
 
-    if (can && (inF !== 0 || inR !== 0)) {
+    if (can && inMag > 0.15) { // 조이스틱 데드존
       // 카메라가 보는 방향을 바닥에 투영해 이동 기준으로 사용
       const dir = new THREE.Vector3();
       this.camera.getWorldDirection(dir);
@@ -981,13 +1013,14 @@ const Game = {
       const ml = Math.hypot(mx, mz);
       if (ml > 1e-6) {
         mx /= ml; mz /= ml;
-        const step = this.ROAM.speed * dt;
+        // 조이스틱은 기울기에 비례한 아날로그 속도 (키보드는 항상 최대)
+        const step = this.ROAM.speed * Math.min(1, inMag) * dt;
         const p = c.group.position;
         // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행
         const nx = p.x + mx * step;
-        if (this.roamAllowedPos(nx, p.z)) p.x = nx;
+        if (this.roamAllowedPos(nx, p.z, p.x, p.z)) p.x = nx;
         const nz = p.z + mz * step;
-        if (this.roamAllowedPos(p.x, nz)) p.z = nz;
+        if (this.roamAllowedPos(p.x, nz, p.x, p.z)) p.z = nz;
 
         // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
         const targetYaw = Math.atan2(-mz, mx);
@@ -2146,6 +2179,11 @@ const Game = {
       this.cueStick.visible = true;
       this.updateAimFromPointer();
       this.updateCueAim();
+      // F2: 보정/복귀 후 프리롬 흔적 정리 — 대기 캐릭터는 규정 위치로
+      this._remoteRoam = null;
+      this._roamLast = null;
+      const off = 1 - this.currentPlayer;
+      if (this.chars[off] && !this.chars[off].walk) this.parkCharacter(this.chars[off], off);
     }
   },
 
@@ -2258,6 +2296,32 @@ const Game = {
       if (k) this.keys[k] = false;
     });
     window.addEventListener("blur", () => { this.keys = {}; }); // 탭 전환 시 눌림 해제
+
+    // F2: 모바일 가상 조이스틱 — 터치 기기에서 프리롬 가능할 때만 표시됨
+    this.isTouch = (window.matchMedia && matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window;
+    this.resetJoy();
+    const joyEl = document.getElementById("joystick");
+    const knobEl = document.getElementById("joy-knob");
+    const setJoy = (e) => {
+      const rect = joyEl.getBoundingClientRect();
+      let dx = e.clientX - (rect.left + rect.width / 2);
+      let dy = e.clientY - (rect.top + rect.height / 2);
+      const R = rect.width / 2 - 18; // 노브가 테두리 밖으로 안 나가게
+      const d = Math.hypot(dx, dy);
+      if (d > R) { dx *= R / d; dy *= R / d; }
+      knobEl.style.transform = `translate(-50%,-50%) translate(${dx}px, ${dy}px)`;
+      this.joy = { f: -dy / R, r: dx / R }; // 위로 밀면 전진
+    };
+    joyEl.addEventListener("pointerdown", (e) => {
+      joyEl.setPointerCapture(e.pointerId);
+      this._joyActive = true;
+      setJoy(e);
+      e.preventDefault();
+    });
+    joyEl.addEventListener("pointermove", (e) => { if (this._joyActive) setJoy(e); });
+    const endJoy = () => { this._joyActive = false; this.resetJoy(); };
+    joyEl.addEventListener("pointerup", endJoy);
+    joyEl.addEventListener("pointercancel", endJoy);
     dom.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // 시점 토글: 기본 ↔ 탑뷰 (버튼 라벨은 "전환하면 보게 될 시점")

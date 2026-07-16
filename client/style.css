@@ -293,3 +293,20 @@
   .rank-no { width: 22px; text-align: center; }
   .rank-nick { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rank-rec { color: #9a9ab0; font-variant-numeric: tabular-nums; }
+
+  /* F2: 모바일 프리롬 조이스틱 — 터치 기기 + 상대 턴에만 표시 */
+  #joystick {
+    position: fixed; right: 26px; bottom: 30px; z-index: 12;
+    width: 112px; height: 112px; border-radius: 50%;
+    background: rgba(8, 8, 22, 0.45);
+    border: 1px solid rgba(255,255,255,0.28);
+    display: none; touch-action: none;
+  }
+  #joy-knob {
+    position: absolute; left: 50%; top: 50%;
+    width: 46px; height: 46px; border-radius: 50%;
+    background: rgba(255,255,255,0.35);
+    border: 1px solid rgba(255,255,255,0.55);
+    transform: translate(-50%,-50%);
+    pointer-events: none;
+  }
