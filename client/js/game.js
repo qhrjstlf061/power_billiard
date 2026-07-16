@@ -2105,6 +2105,17 @@ const Game = {
       e.stopPropagation(); // ESC 등 게임 키 입력과 분리
     });
 
+    // B2: 빠른 대전 + 공개 방 목록 입장
+    document.getElementById("btn-online-quick").addEventListener("click", () => {
+      Sound.ensure();
+      Net.quickMatch();
+    });
+    document.getElementById("room-list").addEventListener("click", (e) => {
+      const btn = e.target.closest(".room-join");
+      if (btn) { Sound.ensure(); Net.join(btn.dataset.code); }
+    });
+    Net.startRoomListPolling();
+
     // R1: 진행 중이던 게임 복귀 (저장된 세션이 있을 때만 노출) + 대기 중 나가기
     const resumeBtn = document.getElementById("btn-online-resume");
     if (Net.loadSession()) resumeBtn.style.display = "";

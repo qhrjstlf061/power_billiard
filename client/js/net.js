@@ -74,6 +74,22 @@ const Net = {
       if (wasActive) Game.onNetDisconnect();
     });
 
+    // B2: 빠른 대전 매칭 성사 — 서버가 방을 만들고 역할(호스트/게스트)을 배정
+    this.socket.on("matched", (d) => {
+      this.waitingQuick = false;
+      this.setQuickLabel("⚡ 빠른 대전");
+      this.isHost = !!d.isHost;
+      this.saveSession(d.code, d.token);
+      this.active = true;
+      this.setStatus("⚡ 상대를 찾았습니다!");
+      this.pingNow();
+      this.send({ t: "hello", v: this.PROTOCOL_VERSION });
+      if (this.isHost) {
+        this.send({ t: "start", target: Game.targetScore });
+        Game.startGame("online");
+      } // 게스트는 호스트의 start 메시지를 받아 시작 (기존 흐름과 동일)
+    });
+
     // R1: 상대가 갑자기 끊김 → 유예 시간 동안 일시정지하고 기다림
     this.socket.on("peer-dropped", (d) => {
       Game.onNetPause("상대 연결 끊김 — 재접속 대기 중", (d && d.graceSec) || 60);
@@ -189,11 +205,14 @@ const Net = {
   host() {
     this.cleanup();
     this.isHost = true;
+    const isPublic = !!(document.getElementById("online-public") || {}).checked;
     this.setStatus("방 생성 중...");
-    this.connect().emit("host", (res) => {
+    this.connect().emit("host", { public: isPublic }, (res) => {
       if (res && res.ok) {
         this.saveSession(res.code, res.token);
-        this.setStatus(`초대 코드: ${res.code} — 상대를 기다리는 중...`);
+        this.setStatus(isPublic
+          ? `공개 방 개설! 목록에 노출 중 — 코드: ${res.code}`
+          : `초대 코드: ${res.code} — 상대를 기다리는 중...`);
       } else {
         const why = res && res.error === "server-full" ? "서버가 가득 찼습니다 — 잠시 후 다시 시도하세요"
                   : res && res.error === "rate" ? "요청이 너무 빠릅니다 — 잠시 후 다시 시도하세요"
@@ -219,6 +238,67 @@ const Net = {
     });
   },
 
+  /* ---------- B2: 빠른 대전 & 방 목록 ---------- */
+  setQuickLabel(txt) {
+    const b = document.getElementById("btn-online-quick");
+    if (b) b.textContent = txt;
+  },
+
+  quickMatch() {
+    if (this.waitingQuick) { // 다시 누르면 취소
+      this.waitingQuick = false;
+      this.setQuickLabel("⚡ 빠른 대전");
+      this.setStatus("빠른 대전 취소됨");
+      if (this.socket) this.socket.emit("quick-cancel");
+      return;
+    }
+    this.cleanup();
+    this.isHost = false;
+    this.setStatus("⚡ 상대를 찾는 중...");
+    this.connect().emit("quick", (res) => {
+      if (res && res.ok) {
+        if (res.waiting) {
+          this.waitingQuick = true;
+          this.setQuickLabel("⏳ 찾는 중... (취소)");
+          this.setStatus("⚡ 상대를 찾는 중 — 버튼을 다시 누르면 취소됩니다");
+        }
+        // waiting=false면 곧바로 matched 이벤트가 옴
+      } else {
+        this.setStatus(res && res.error === "rate" ? "요청이 너무 빠릅니다 — 잠시 후 다시"
+          : res && res.error === "server-full" ? "서버가 가득 찼습니다"
+          : "빠른 대전 실패 — 잠시 후 다시 시도하세요");
+      }
+    });
+  },
+
+  // 공개 방 목록: 시작 화면이 떠 있는 동안 5초마다 REST로 갱신
+  startRoomListPolling() {
+    clearInterval(this._roomsTimer);
+    const poll = () => {
+      const overlay = document.getElementById("overlay-start");
+      if (!overlay || !overlay.classList.contains("show")) return;
+      fetch((window.BILLIARD_SERVER || "") + "/rooms")
+        .then(r => r.json())
+        .then(d => this.renderRoomList(d.rooms))
+        .catch(() => this.renderRoomList(null));
+    };
+    poll();
+    this._roomsTimer = setInterval(poll, 5000);
+  },
+
+  renderRoomList(list) {
+    const el = document.getElementById("room-list");
+    if (!el) return;
+    if (!list) { el.innerHTML = '<span class="room-empty">방 목록을 불러올 수 없습니다</span>'; return; }
+    if (!list.length) { el.innerHTML = '<span class="room-empty">공개 방 없음 — 방을 만들거나 ⚡빠른 대전!</span>'; return; }
+    // 코드는 서버가 만든 [A-Z2-9]{6}만 오므로 그대로 넣어도 안전
+    el.innerHTML = list.map(r =>
+      `<div class="room-row"><span class="room-code">🎱 ${r.code}</span>` +
+      `<span class="room-age">${r.ageSec < 60 ? r.ageSec + "초" : Math.floor(r.ageSec / 60) + "분"} 전</span>` +
+      `<button class="room-join" data-code="${r.code}">입장</button></div>`
+    ).join("");
+  },
+
   send(obj) {
     if (this.socket && this.socket.connected) this.socket.emit("msg", obj);
   },
@@ -226,6 +306,11 @@ const Net = {
   cleanup() {
     this.active = false;
     this.pendingResume = false;
+    if (this.waitingQuick) { // 빠른 대전 대기 중이었다면 대기열에서도 빠짐
+      this.waitingQuick = false;
+      this.setQuickLabel("⚡ 빠른 대전");
+      if (this.socket) this.socket.emit("quick-cancel");
+    }
     this.clearSession(); // 의도적 종료 — 복귀 대상 아님
     this.updatePingBadge(null); // 배지 즉시 숨김
     if (this.socket) this.socket.emit("leave");

@@ -236,3 +236,31 @@
   #ping-badge.good { color: #81c784; }
   #ping-badge.warn { color: #ffd54f; }
   #ping-badge.bad  { color: #e57373; }
+
+  /* B2: 빠른 대전 & 공개 방 목록 */
+  .btn-quick { background: #e65100; }
+  .btn-quick:hover { background: #ef6c00; }
+  .pub-label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 0.8rem; color: #bbb; cursor: pointer; user-select: none;
+  }
+  #room-list {
+    width: 100%; max-height: 96px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 4px;
+    margin-top: 2px;
+  }
+  .room-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; font-size: 0.82rem;
+  }
+  .room-code { font-weight: 700; letter-spacing: 1px; }
+  .room-age { flex: 1; text-align: right; color: #9a9ab0; font-size: 0.72rem; }
+  .room-join {
+    padding: 3px 12px; border: none; border-radius: 6px; cursor: pointer;
+    background: #7b1fa2; color: #fff; font-size: 0.78rem; font-weight: 700;
+  }
+  .room-join:hover { background: #8e24aa; }
+  .room-empty { font-size: 0.75rem; color: #77778c; text-align: center; padding: 2px 0; }

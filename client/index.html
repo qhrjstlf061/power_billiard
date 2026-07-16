@@ -61,12 +61,17 @@
     </div>
     <div class="online-box">
       <div class="online-row">
+        <button class="btn-online btn-quick" id="btn-online-quick">⚡ 빠른 대전</button>
         <button class="btn-online" id="btn-online-host">🌐 방 만들기</button>
+        <label class="pub-label"><input type="checkbox" id="online-public"> 공개</label>
+      </div>
+      <div class="online-row">
         <input id="online-code" placeholder="초대 코드" maxlength="6" autocomplete="off">
         <button class="btn-online" id="btn-online-join">입장</button>
       </div>
+      <div id="room-list"></div>
       <button class="btn-online" id="btn-online-resume" style="display:none">⏪ 진행 중이던 게임 복귀</button>
-      <p id="online-status">온라인 대결: 방을 만들어 코드를 공유하거나, 받은 코드로 입장하세요</p>
+      <p id="online-status">온라인 대결: ⚡빠른 대전, 방 목록 입장, 또는 초대 코드로!</p>
     </div>
     <p>마우스 이동: 조준 · 좌클릭 꾹: 힘 충전 → 놓으면 발사<br>충전 중 우클릭/ESC: 샷 취소 · 우클릭 드래그: 시점 회전 · 휠: 줌</p>
   </div>

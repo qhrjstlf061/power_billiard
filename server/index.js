@@ -245,29 +245,86 @@ setInterval(() => {
   }
 }, SWEEP_MS).unref();
 
+/* ---------- B2: 빠른 대전 대기열 ---------- */
+const quickQueue = []; // 대기 중인 소켓들 (둘 모이면 자동 방 생성)
+
+function dequeue(socket) {
+  const i = quickQueue.indexOf(socket);
+  if (i >= 0) quickQueue.splice(i, 1);
+}
+
+function createRoom(hostSocket, isPublic) {
+  const code = makeCode();
+  const token = crypto.randomBytes(12).toString("hex");
+  rooms.set(code, {
+    code,
+    createdAt: Date.now(),
+    touched: Date.now(),
+    isPublic: !!isPublic,
+    players: [{ token, socketId: hostSocket.id, connected: true }, null],
+    state: newState()
+  });
+  hostSocket.join(code);
+  hostSocket.data.code = code;
+  return { code, token };
+}
+
 io.on("connection", (socket) => {
-  socket.on("host", (ack) => {
+  socket.on("host", (opts, ack) => {
+    if (typeof opts === "function") { ack = opts; opts = {}; } // 옛 시그니처 호환
     if (typeof ack !== "function") return;
     if (!allowRate(socket, "room", 1, 3)) return ack({ ok: false, error: "rate" });
     if (rooms.size >= MAX_ROOMS) return ack({ ok: false, error: "server-full" });
+    dequeue(socket);
     leaveRoom(socket);
+    const { code, token } = createRoom(socket, opts && opts.public === true);
+    ack({ ok: true, code, token });
+  });
+
+  // B2: 빠른 대전 — 대기열에 넣고 둘 모이면 자동으로 방 생성 (먼저 기다린 쪽 = 호스트)
+  socket.on("quick", (ack) => {
+    const reply = typeof ack === "function" ? ack : () => {};
+    if (!allowRate(socket, "room", 1, 3)) return reply({ ok: false, error: "rate" });
+    if (rooms.size >= MAX_ROOMS) return reply({ ok: false, error: "server-full" });
+    dequeue(socket);
+    leaveRoom(socket);
+
+    let partner = null;
+    while (quickQueue.length) {
+      const c = quickQueue.shift();
+      if (c.connected && c !== socket) { partner = c; break; }
+    }
+    if (!partner) {
+      quickQueue.push(socket);
+      return reply({ ok: true, waiting: true });
+    }
+
     const code = makeCode();
-    const token = crypto.randomBytes(12).toString("hex");
+    const tokens = [crypto.randomBytes(12).toString("hex"), crypto.randomBytes(12).toString("hex")];
     rooms.set(code, {
       code,
       createdAt: Date.now(),
       touched: Date.now(),
-      players: [{ token, socketId: socket.id, connected: true }, null],
+      isPublic: false, // 매칭된 방은 목록에 노출할 필요 없음
+      players: [
+        { token: tokens[0], socketId: partner.id, connected: true },
+        { token: tokens[1], socketId: socket.id, connected: true }
+      ],
       state: newState()
     });
-    socket.join(code);
-    socket.data.code = code;
-    if (typeof ack === "function") ack({ ok: true, code, token });
+    partner.join(code); partner.data.code = code;
+    socket.join(code); socket.data.code = code;
+    reply({ ok: true, waiting: false });
+    partner.emit("matched", { code, token: tokens[0], isHost: true });
+    socket.emit("matched", { code, token: tokens[1], isHost: false });
   });
+
+  socket.on("quick-cancel", () => dequeue(socket));
 
   socket.on("join", (code, ack) => {
     const reply = typeof ack === "function" ? ack : () => {};
     if (!allowRate(socket, "room", 1, 3)) return reply({ ok: false, error: "rate" });
+    dequeue(socket);
     leaveRoom(socket);
     code = String(code || "").toUpperCase().trim().slice(0, 12);
     const room = rooms.get(code);
@@ -321,6 +378,7 @@ io.on("connection", (socket) => {
     if (!allowRate(socket, "room", 1, 3)) return reply({ ok: false, error: "rate" });
     // R2-4: 복귀 경로에서도 버전 확인 (새로고침으로 옛 캐시가 로드된 경우)
     if (data && data.v !== undefined && data.v !== PROTOCOL_VERSION) return reply({ ok: false, error: "version" });
+    dequeue(socket);
     leaveRoom(socket); // 다른 방에 걸쳐 있었다면 정리
     const code = String((data && data.code) || "").toUpperCase().trim().slice(0, 12);
     const room = rooms.get(code);
@@ -354,16 +412,38 @@ io.on("connection", (socket) => {
   });
 
   socket.on("leave", () => leaveRoom(socket));
-  socket.on("disconnect", () => dropPlayer(socket));
+  socket.on("disconnect", () => { dequeue(socket); dropPlayer(socket); });
 });
 
-/* ---------- 상태 조회 (R0 완료 기준) ---------- */
+/* ---------- REST: 방 목록 (B2) & 상태 조회 ---------- */
+// GitHub Pages 등 다른 origin의 fetch를 위한 CORS 헤더 (허용 목록 기준)
+function setCorsHeader(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return;
+  if (!ALLOWED_ORIGINS.length || ALLOWED_ORIGINS.includes(origin)) {
+    res.set("Access-Control-Allow-Origin", origin);
+  }
+}
+
+// 공개 대기 방 목록 — 공개 방의 코드는 목록 입장용이므로 노출이 곧 기능
+app.get("/rooms", (req, res) => {
+  setCorsHeader(req, res);
+  res.json({
+    rooms: [...rooms.values()]
+      .filter(r => r.isPublic && r.state.phase === "waiting"
+        && r.players[0] && r.players[0].connected && !r.players[1])
+      .map(r => ({ code: r.code, ageSec: Math.round((Date.now() - r.createdAt) / 1000) }))
+  });
+});
+
 // 초대 코드는 입장 자격이므로 그대로 노출하지 않고 마스킹한다
 app.get("/health", (req, res) => {
+  setCorsHeader(req, res);
   res.json({
     ok: true,
     version: PROTOCOL_VERSION,
     uptimeSec: Math.round(process.uptime()),
+    quickQueue: quickQueue.length,
     rooms: [...rooms.values()].map(r => ({
       drops: r.drops || 0, // R2: 차단된 메시지 수
       idleSec: Math.round((Date.now() - (r.touched || r.createdAt)) / 1000),

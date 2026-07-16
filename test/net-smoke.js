@@ -220,6 +220,53 @@ async function startServer() {
   cors.kill();
   log("17. CORS 화이트리스트 OK — 허용 안 된 origin 차단, 허용 origin 연결");
 
+  /* ========== B2: 공개 방 목록 + 빠른 대전 ========== */
+  // 공개 방은 목록에 뜨고, 비공개 방은 안 뜸
+  const pubHost = io(URL);
+  const privHost = io(URL);
+  const hp = await ack(pubHost, "host", { public: true });
+  const hv = await ack(privHost, "host", { public: false });
+  assert(hp.ok && hv.ok, "공개/비공개 방 생성 실패");
+  let rl = await (await fetch(URL + "/rooms")).json();
+  assert(rl.rooms.length === 1 && rl.rooms[0].code === hp.code, "공개 방만 목록에 떠야 함");
+  // 목록의 코드로 실제 입장 가능
+  const lister = io(URL);
+  const jl = await ack(lister, "join", rl.rooms[0].code);
+  assert(jl.ok, "목록의 방에 입장 가능해야 함");
+  rl = await (await fetch(URL + "/rooms")).json();
+  assert(rl.rooms.length === 0, "차기 시작한 방은 목록에서 빠져야 함");
+  pubHost.emit("leave"); privHost.emit("leave"); lister.emit("leave");
+  log("18. 공개 방 목록 OK — 공개만 노출, 목록 입장, 시작 후 제외");
+
+  // 빠른 대전: 첫 번째는 대기, 두 번째에서 매칭 — 역할 배정 + 릴레이 동작
+  const q1 = io(URL);
+  const q2 = io(URL);
+  const m1 = once(q1, "matched");
+  const m2 = once(q2, "matched");
+  const w1 = await ack(q1, "quick");
+  assert(w1.ok && w1.waiting === true, "첫 대기자는 waiting이어야 함");
+  const w2 = await ack(q2, "quick");
+  assert(w2.ok && w2.waiting === false, "둘째는 즉시 매칭돼야 함");
+  const [md1, md2] = await Promise.all([m1, m2]);
+  assert(md1.isHost === true && md2.isHost === false, "먼저 기다린 쪽이 호스트여야 함");
+  assert(md1.code === md2.code && md1.token && md2.token, "같은 방 + 토큰 발급");
+  const qStart = once(q2, "msg");
+  q1.emit("msg", { t: "start", target: 20 });
+  assert((await qStart).t === "start", "매칭된 방에서 릴레이돼야 함");
+  q1.emit("leave"); q2.emit("leave");
+  log("19. 빠른 대전 OK — 대기→매칭→역할 배정→릴레이");
+
+  // 대기 취소: 취소한 사람과는 매칭되지 않음
+  const q3 = io(URL);
+  const q4 = io(URL);
+  await ack(q3, "quick");
+  q3.emit("quick-cancel");
+  await sleep(100);
+  const w4 = await ack(q4, "quick");
+  assert(w4.waiting === true, "취소자와 매칭되면 안 됨 (q4는 대기여야 함)");
+  q4.emit("quick-cancel");
+  log("20. 빠른 대전 취소 OK — 취소자는 대기열에서 제외");
+
   console.log("ALL PASS");
   serverProc.kill();
   process.exit(0);
