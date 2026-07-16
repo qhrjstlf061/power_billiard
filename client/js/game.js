@@ -1095,10 +1095,12 @@ const Game = {
         { name: "플레이어 2", icon: "🟡", ballIndex: 1, score: 0 }
       ];
     } else if (mode === "online") {
-      // 호스트 = 흰 공(선공), 게스트 = 노란 공. 각자 화면에서는 "나/상대"로 표시
+      // 호스트 = 흰 공(선공), 게스트 = 노란 공. 닉네임이 있으면 표시 (B3)
+      const me = Net.getNick() || "나";
+      const peer = Net.peerNick || "상대";
       this.players = [
-        { name: Net.isHost ? "나" : "상대", icon: "⚪", ballIndex: 0, score: 0 },
-        { name: Net.isHost ? "상대" : "나", icon: "🟡", ballIndex: 1, score: 0 }
+        { name: Net.isHost ? me : peer, icon: "⚪", ballIndex: 0, score: 0 },
+        { name: Net.isHost ? peer : me, icon: "🟡", ballIndex: 1, score: 0 }
       ];
     } else {
       this.players = [{ name: "연습", icon: "⚪", ballIndex: 0, score: 0 }];
@@ -1839,6 +1841,20 @@ const Game = {
     if (!msg || typeof msg !== "object") return;
     switch (msg.t) {
       case "hello":
+        // B3: 상대 닉네임 교환 — 스코어보드에 반영 (textContent라 이스케이프 불필요)
+        if (typeof msg.n === "string" && msg.n) {
+          Net.peerNick = msg.n.slice(0, 12);
+          if (this.mode === "online" && this.players.length === 2) {
+            this.players[1 - this.myIdx].name = Net.peerNick;
+            this.setupScoreboard();
+          }
+        }
+        break;
+      case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)
+        if (this.mode === "online") {
+          this.applyResumeState(msg.snap);
+          this.showToast("⚖️ 서버 판정으로 보정되었습니다");
+        }
         break;
       case "start": // 게스트: 호스트가 확정한 설정으로 시작
         this.targetScore = msg.target || this.targetScore;
@@ -2104,6 +2120,12 @@ const Game = {
       if (e.key === "Enter") Net.join(e.target.value);
       e.stopPropagation(); // ESC 등 게임 키 입력과 분리
     });
+
+    // B3: 닉네임 — 저장된 값 복원, 바뀌면 서버에 재등록
+    const nickEl = document.getElementById("nick-input");
+    try { nickEl.value = localStorage.getItem("billiard-nick") || ""; } catch (e) { /* 무시 */ }
+    nickEl.addEventListener("change", () => Net.identify());
+    nickEl.addEventListener("keydown", (e) => e.stopPropagation()); // ESC 등 게임 키와 분리
 
     // B2: 빠른 대전 + 공개 방 목록 입장
     document.getElementById("btn-online-quick").addEventListener("click", () => {

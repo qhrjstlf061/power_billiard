@@ -11,6 +11,8 @@ const http = require("http");
 const crypto = require("crypto");
 const express = require("express");
 const { Server } = require("socket.io");
+const db = require("./db");       // B3: 전적/랭킹 (내장 SQLite)
+const judge = require("./judge"); // B4: 서버 권위 판정
 
 const app = express();
 const server = http.createServer(app);
@@ -60,8 +62,23 @@ function newState() {
   };
 }
 
+// B3: 게임 결과를 전적 DB에 기록 (게임당 1회, 익명(구버전)·자가 대전은 제외)
+function recordMatchSafe(room, winnerIdx, forfeit) {
+  if (room.recorded || winnerIdx < 0) return;
+  const w = room.players[winnerIdx], l = room.players[1 - winnerIdx];
+  if (!w || !l || !w.uid || !l.uid || w.uid === l.uid) return;
+  room.recorded = true;
+  const s = room.state.scores;
+  db.recordMatch(
+    { uid: w.uid, nick: w.nick, score: s[winnerIdx] },
+    { uid: l.uid, nick: l.nick, score: s[1 - winnerIdx] },
+    forfeit
+  );
+}
+
 // 릴레이하며 세션 상태 기록. 물리 결과는 해석하지 않고 호스트가 보낸 값을 그대로 저장.
-function recordState(room, msg) {
+// (B4 enforce 모드에서만 judge가 이 값을 서버 시뮬레이션 결과로 덮어씀)
+function recordState(room, msg, idx) {
   const st = room.state;
   switch (msg.t) {
     case "start":
@@ -71,6 +88,7 @@ function recordState(room, msg) {
       st.currentPlayer = 0;
       st.turnNo = 0;
       st.lastSync = null;
+      room.recorded = false; // 새 게임 — 전적 기록 가능
       break;
     case "shot":
       if (Number.isFinite(msg.turn)) st.turnNo = msg.turn;
@@ -82,7 +100,10 @@ function recordState(room, msg) {
       if (Array.isArray(msg.s)) st.scores = msg.s.map(Number);
       if (Number.isFinite(msg.cp)) st.currentPlayer = msg.cp;
       if (Number.isFinite(msg.turn)) st.turnNo = msg.turn;
-      if (msg.over) st.phase = "ended";
+      if (msg.over) {
+        st.phase = "ended";
+        recordMatchSafe(room, st.scores[0] > st.scores[1] ? 0 : 1, false); // 목표 선취자 = 승자
+      }
       break;
     case "rematch":
       st.phase = "playing";
@@ -90,8 +111,10 @@ function recordState(room, msg) {
       st.currentPlayer = 0;
       st.turnNo = 0;
       st.lastSync = null;
+      room.recorded = false;
       break;
-    case "bye":
+    case "bye": // 게임 중 나가기 = 몰수패
+      if (st.phase === "playing" && idx >= 0) recordMatchSafe(room, 1 - idx, true);
       st.phase = "ended";
       break;
   }
@@ -119,6 +142,10 @@ function leaveRoom(socket) {
   if (!room) return;
   socket.to(code).emit("peer-left");
   const idx = room.players.findIndex(p => p && p.socketId === socket.id);
+  // B3: 게임 중 이탈(bye 없이 leave만 온 경우 포함) = 몰수패로 기록
+  if (idx >= 0 && room.state.phase === "playing" && room.players[0] && room.players[1]) {
+    recordMatchSafe(room, 1 - idx, true);
+  }
   if (idx === 0) teardown(room); // 호스트가 나가면 방 자체를 제거
   else if (idx === 1) {
     // 게임 중이던 방에 새 게스트가 이어받아 들어오지 않도록 상태 초기화
@@ -153,7 +180,8 @@ function dropPlayer(socket) {
 
   pl.graceTimer = setTimeout(() => {
     if (rooms.get(code) !== room) return; // 이미 정리된 방
-    // 유예 초과 → 몰수: 남아 있는 쪽에 승리 통지 후 방 정리
+    // 유예 초과 → 몰수: 남아 있는 쪽에 승리 통지 + 전적 기록(B3) 후 방 정리
+    if (room.state.phase === "playing") recordMatchSafe(room, 1 - idx, true);
     const other = room.players[1 - idx];
     if (other && other.connected && other.socketId) io.to(other.socketId).emit("forfeit-win");
     teardown(room);
@@ -178,12 +206,14 @@ const MAX_ROOMS = 200;        // 방 생성 폭주 방지
 // 메시지 스키마 검증 — 클라 게임 상수 기준 (force 100~800, spin ±0.75, 공 4개)
 const num = (v, min, max) => typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
 const VALIDATORS = {
-  hello: (m) => m.v === undefined || num(m.v, 0, 1e6),
+  hello: (m) => (m.v === undefined || num(m.v, 0, 1e6))
+    && (m.n === undefined || (typeof m.n === "string" && m.n.length <= 12)),
   start: (m) => num(m.target, 1, 500),
   aim: (m) => num(m.a, -10, 10) && num(m.sx, -0.76, 0.76) && num(m.sy, -0.76, 0.76) && num(m.g, 0, 1),
   shot: (m) => num(m.turn, 1, 1e9) && !!m.p && typeof m.p === "object"
-    && num(m.p.aimAngle, -10, 10) && num(m.p.force, 99.9, 800.1)
-    && num(m.p.spinX, -0.76, 0.76) && num(m.p.spinY, -0.76, 0.76),
+    && num(m.p.angle, -10, 10) && num(m.p.force, 99.9, 800.1)
+    && num(m.p.spinX, -0.76, 0.76) && num(m.p.spinY, -0.76, 0.76)
+    && (m.p.frac === undefined || num(m.p.frac, 0, 1)),
   sync: (m) => Array.isArray(m.b) && m.b.length === 4
     && m.b.every(p => Array.isArray(p) && p.length === 2 && num(p[0], -10, 10) && num(p[1], -10, 10)),
   state: (m) => Array.isArray(m.s) && m.s.length === 2 && m.s.every(x => num(x, 0, 10000))
@@ -261,7 +291,7 @@ function createRoom(hostSocket, isPublic) {
     createdAt: Date.now(),
     touched: Date.now(),
     isPublic: !!isPublic,
-    players: [{ token, socketId: hostSocket.id, connected: true }, null],
+    players: [{ token, socketId: hostSocket.id, connected: true, uid: hostSocket.data.uid || null, nick: hostSocket.data.nick || null }, null],
     state: newState()
   });
   hostSocket.join(code);
@@ -270,6 +300,19 @@ function createRoom(hostSocket, isPublic) {
 }
 
 io.on("connection", (socket) => {
+  // B3: 익명 계정 식별 — 브라우저가 만든 uid + 닉네임 (연결마다 다시 보냄)
+  socket.on("identify", (data) => {
+    if (!data || typeof data !== "object") return;
+    if (!allowRate(socket, "id", 1, 5)) return;
+    const uid = String(data.uid || "").slice(0, 64);
+    let nick = String(data.nick || "").replace(/\s+/g, " ").trim().slice(0, 12);
+    if (uid.length < 8) return;
+    if (!nick) nick = "손님" + uid.slice(0, 4);
+    socket.data.uid = uid;
+    socket.data.nick = nick;
+    db.upsertPlayer(uid, nick);
+  });
+
   socket.on("host", (opts, ack) => {
     if (typeof opts === "function") { ack = opts; opts = {}; } // 옛 시그니처 호환
     if (typeof ack !== "function") return;
@@ -307,8 +350,8 @@ io.on("connection", (socket) => {
       touched: Date.now(),
       isPublic: false, // 매칭된 방은 목록에 노출할 필요 없음
       players: [
-        { token: tokens[0], socketId: partner.id, connected: true },
-        { token: tokens[1], socketId: socket.id, connected: true }
+        { token: tokens[0], socketId: partner.id, connected: true, uid: partner.data.uid || null, nick: partner.data.nick || null },
+        { token: tokens[1], socketId: socket.id, connected: true, uid: socket.data.uid || null, nick: socket.data.nick || null }
       ],
       state: newState()
     });
@@ -331,7 +374,7 @@ io.on("connection", (socket) => {
     if (!room) return reply({ ok: false, error: "no-room" });
     if (room.players[1]) return reply({ ok: false, error: "full" });
     const token = crypto.randomBytes(12).toString("hex");
-    room.players[1] = { token, socketId: socket.id, connected: true };
+    room.players[1] = { token, socketId: socket.id, connected: true, uid: socket.data.uid || null, nick: socket.data.nick || null };
     touch(room);
     socket.join(code);
     socket.data.code = code;
@@ -362,9 +405,15 @@ io.on("connection", (socket) => {
       return logDrop(room, idx, obj, "version");
     }
 
-    recordState(room, obj);
+    recordState(room, obj, idx);
     touch(room);
     socket.to(room.code).emit("msg", obj);
+
+    // B4: 서버 심판 — 샷을 직접 시뮬레이션하고 호스트의 보고와 대조
+    if (obj.t === "start" || obj.t === "rematch") judge.onGameStart(room);
+    else if (obj.t === "shot") judge.onShot(room, obj);
+    else if (obj.t === "sync") judge.onSync(room, obj, io);
+    else if (obj.t === "state") judge.onState(room, obj, io);
   });
 
   // R3: 연결 품질 측정 — 클라가 5초마다 왕복 시간을 잼
@@ -436,6 +485,17 @@ app.get("/rooms", (req, res) => {
   });
 });
 
+// B3: 랭킹 (상위 10명) & 내 전적
+app.get("/ranking", (req, res) => {
+  setCorsHeader(req, res);
+  res.json({ top: db.getRanking(10) });
+});
+app.get("/player", (req, res) => {
+  setCorsHeader(req, res);
+  const p = db.getPlayer(String(req.query.uid || ""));
+  res.json({ ok: !!p, player: p });
+});
+
 // 초대 코드는 입장 자격이므로 그대로 노출하지 않고 마스킹한다
 app.get("/health", (req, res) => {
   setCorsHeader(req, res);
@@ -444,6 +504,7 @@ app.get("/health", (req, res) => {
     version: PROTOCOL_VERSION,
     uptimeSec: Math.round(process.uptime()),
     quickQueue: quickQueue.length,
+    judge: { mode: judge.MODE, ...judge.stats }, // B4: 판정 통계 (불일치 = 포트 오차 or 치트)
     rooms: [...rooms.values()].map(r => ({
       drops: r.drops || 0, // R2: 차단된 메시지 수
       idleSec: Math.round((Date.now() - (r.touched || r.createdAt)) / 1000),

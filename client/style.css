@@ -264,3 +264,32 @@
   }
   .room-join:hover { background: #8e24aa; }
   .room-empty { font-size: 0.75rem; color: #77778c; text-align: center; padding: 2px 0; }
+
+  /* B3: 닉네임 & 랭킹 보드 */
+  #nick-input {
+    width: 200px; padding: 7px 12px; font-size: 0.88rem; text-align: center;
+    border: 1px solid rgba(255,255,255,0.35); border-radius: 10px;
+    background: rgba(255,255,255,0.08); color: #fff; outline: none;
+  }
+  .rank-box {
+    width: 100%; padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+  }
+  .rank-title {
+    font-size: 0.85rem; font-weight: 700; color: #ffd54f;
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 6px;
+  }
+  #my-record { font-size: 0.72rem; font-weight: 600; color: #9a9ab0; }
+  #rank-list {
+    display: flex; flex-direction: column; gap: 3px;
+    max-height: 110px; overflow-y: auto;
+  }
+  .rank-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 3px 10px; font-size: 0.8rem;
+    background: rgba(255,255,255,0.05); border-radius: 7px;
+  }
+  .rank-no { width: 22px; text-align: center; }
+  .rank-nick { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-rec { color: #9a9ab0; font-variant-numeric: tabular-nums; }

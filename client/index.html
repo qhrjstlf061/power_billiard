@@ -61,6 +61,9 @@
     </div>
     <div class="online-box">
       <div class="online-row">
+        <input id="nick-input" placeholder="닉네임 (랭킹에 표시)" maxlength="10" autocomplete="off">
+      </div>
+      <div class="online-row">
         <button class="btn-online btn-quick" id="btn-online-quick">⚡ 빠른 대전</button>
         <button class="btn-online" id="btn-online-host">🌐 방 만들기</button>
         <label class="pub-label"><input type="checkbox" id="online-public"> 공개</label>
@@ -72,6 +75,10 @@
       <div id="room-list"></div>
       <button class="btn-online" id="btn-online-resume" style="display:none">⏪ 진행 중이던 게임 복귀</button>
       <p id="online-status">온라인 대결: ⚡빠른 대전, 방 목록 입장, 또는 초대 코드로!</p>
+    </div>
+    <div class="rank-box">
+      <div class="rank-title">🏆 랭킹 <span id="my-record"></span></div>
+      <div id="rank-list"><span class="room-empty">불러오는 중...</span></div>
     </div>
     <p>마우스 이동: 조준 · 좌클릭 꾹: 힘 충전 → 놓으면 발사<br>충전 중 우클릭/ESC: 샷 취소 · 우클릭 드래그: 시점 회전 · 휠: 줌</p>
   </div>

@@ -29,6 +29,40 @@ const Net = {
     } catch (e) { /* 시크릿 모드 등 저장 불가 환경은 무시 */ }
   },
 
+  /* ---------- B3: 익명 계정 (uid + 닉네임) ---------- */
+  peerNick: null, // 상대 닉네임 (hello 메시지로 교환)
+
+  getUid() {
+    try {
+      let uid = localStorage.getItem("billiard-uid");
+      if (!uid) {
+        uid = (crypto.randomUUID && crypto.randomUUID())
+          || Date.now().toString(16) + Math.random().toString(16).slice(2);
+        localStorage.setItem("billiard-uid", uid);
+      }
+      return uid;
+    } catch (e) { // 시크릿 모드: 세션 한정 임시 uid
+      return this._memUid || (this._memUid = "mem-" + Math.random().toString(16).slice(2));
+    }
+  },
+
+  getNick() {
+    const el = document.getElementById("nick-input");
+    const nick = el ? el.value.replace(/\s+/g, " ").trim().slice(0, 12) : "";
+    try { if (nick) localStorage.setItem("billiard-nick", nick); } catch (e) { /* 무시 */ }
+    return nick;
+  },
+
+  identify() {
+    if (this.socket) this.socket.emit("identify", { uid: this.getUid(), nick: this.getNick() });
+  },
+
+  // 사용자 입력을 HTML에 넣을 때 이스케이프 (닉네임 등)
+  esc(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  },
+
   loadSession() {
     try {
       const s = JSON.parse(localStorage.getItem("billiard-session"));
@@ -57,7 +91,7 @@ const Net = {
       this.active = true;
       this.setStatus("연결됨!");
       this.pingNow(); // 핑 배지 즉시 갱신
-      this.send({ t: "hello", v: this.PROTOCOL_VERSION });
+      this.send({ t: "hello", v: this.PROTOCOL_VERSION, n: this.getNick() || undefined });
       if (this.isHost) {
         // 호스트가 게임 설정을 확정하고 시작을 알림 (호스트 = 흰 공, 선공)
         this.send({ t: "start", target: Game.targetScore });
@@ -83,7 +117,7 @@ const Net = {
       this.active = true;
       this.setStatus("⚡ 상대를 찾았습니다!");
       this.pingNow();
-      this.send({ t: "hello", v: this.PROTOCOL_VERSION });
+      this.send({ t: "hello", v: this.PROTOCOL_VERSION, n: this.getNick() || undefined });
       if (this.isHost) {
         this.send({ t: "start", target: Game.targetScore });
         Game.startGame("online");
@@ -145,6 +179,7 @@ const Net = {
     });
     this.socket.on("connect", () => {
       clearTimeout(this._wakeTimer);
+      this.identify(); // B3: 연결(재연결 포함)마다 신원 재등록
       if (this.pendingResume) { this.pendingResume = false; this.resume(true); }
     });
     this.startPing();
@@ -271,19 +306,46 @@ const Net = {
     });
   },
 
-  // 공개 방 목록: 시작 화면이 떠 있는 동안 5초마다 REST로 갱신
+  // 공개 방 목록 + 랭킹(B3): 시작 화면이 떠 있는 동안 5초마다 REST로 갱신
   startRoomListPolling() {
     clearInterval(this._roomsTimer);
+    const base = window.BILLIARD_SERVER || "";
     const poll = () => {
       const overlay = document.getElementById("overlay-start");
       if (!overlay || !overlay.classList.contains("show")) return;
-      fetch((window.BILLIARD_SERVER || "") + "/rooms")
+      fetch(base + "/rooms")
         .then(r => r.json())
         .then(d => this.renderRoomList(d.rooms))
         .catch(() => this.renderRoomList(null));
+      fetch(base + "/ranking")
+        .then(r => r.json())
+        .then(d => this.renderRanking(d.top))
+        .catch(() => { /* 서버 슬립 중이면 다음 주기에 */ });
+      fetch(base + "/player?uid=" + encodeURIComponent(this.getUid()))
+        .then(r => r.json())
+        .then(d => {
+          const el = document.getElementById("my-record");
+          if (el) el.textContent = d.ok ? `내 전적 ${d.player.wins}승 ${d.player.losses}패` : "";
+        })
+        .catch(() => { /* 무시 */ });
     };
     poll();
     this._roomsTimer = setInterval(poll, 5000);
+  },
+
+  renderRanking(top) {
+    const el = document.getElementById("rank-list");
+    if (!el) return;
+    if (!top || !top.length) {
+      el.innerHTML = '<span class="room-empty">아직 전적 없음 — 첫 승리의 주인공이 되세요!</span>';
+      return;
+    }
+    const medal = ["🥇", "🥈", "🥉"];
+    el.innerHTML = top.map((p, i) =>
+      `<div class="rank-row"><span class="rank-no">${medal[i] || (i + 1)}</span>` +
+      `<span class="rank-nick">${this.esc(p.nick)}</span>` +
+      `<span class="rank-rec">${p.wins}승 ${p.losses}패</span></div>`
+    ).join("");
   },
 
   renderRoomList(list) {
@@ -312,6 +374,7 @@ const Net = {
       if (this.socket) this.socket.emit("quick-cancel");
     }
     this.clearSession(); // 의도적 종료 — 복귀 대상 아님
+    this.peerNick = null;
     this.updatePingBadge(null); // 배지 즉시 숨김
     if (this.socket) this.socket.emit("leave");
   }

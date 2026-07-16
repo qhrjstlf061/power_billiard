@@ -3,7 +3,10 @@
    R0: 방/릴레이/세션 상태  ·  R1: 끊김 유예/재접속/몰수승  ·  R2: 스키마/턴/레이트/버전 방어 */
 const { spawn } = require("child_process");
 const path = require("path");
+const os = require("os");
 const { io } = require("socket.io-client");
+const Phys = require("../shared/physics");
+const Rules = require("../shared/rules");
 
 const PORT = 3100;
 const GRACE_SEC = 2;
@@ -38,7 +41,8 @@ async function startServer() {
   serverProc = spawn(process.execPath, [path.join(__dirname, "..", "server", "index.js")], {
     env: {
       ...process.env, PORT: String(PORT), GRACE_SEC: String(GRACE_SEC),
-      WAIT_TTL_SEC: String(WAIT_TTL_SEC), IDLE_TTL_SEC: String(IDLE_TTL_SEC), SWEEP_MS: "500"
+      WAIT_TTL_SEC: String(WAIT_TTL_SEC), IDLE_TTL_SEC: String(IDLE_TTL_SEC), SWEEP_MS: "500",
+      DB_PATH: path.join(os.tmpdir(), "billiard-test-" + Date.now() + ".db") // 테스트마다 새 DB
     },
     stdio: "ignore"
   });
@@ -74,7 +78,7 @@ async function startServer() {
 
   // 정식 턴 순서: 호스트(선공) 샷 1 → 호스트가 sync + state 확정
   const gotShot = once(guest, "msg");
-  host.emit("msg", { t: "shot", turn: 1, p: { aimAngle: 0.5, force: 300, spinX: 0, spinY: 0 } });
+  host.emit("msg", { t: "shot", turn: 1, p: { angle: 0.5, force: 300, spinX: 0, spinY: 0 } });
   assert((await gotShot).t === "shot", "정상 shot 릴레이 실패");
   host.emit("msg", { t: "sync", turn: 1, b: [[0.1, 0.2], [1, 1], [2, 2], [3, 3]] });
   host.emit("msg", { t: "state", turn: 1, s: [10, 5], cp: 0, over: false });
@@ -88,12 +92,12 @@ async function startServer() {
   await expectDrop(() => guest.emit("msg", { t: "start", target: 20 }), host, "게스트 start");
   await expectDrop(() => guest.emit("msg", { t: "state", turn: 9, s: [99, 0], cp: 1 }), host, "게스트 state");
   // 턴 위반: 지금은 호스트 차례(cp=0)인데 게스트가 shot
-  await expectDrop(() => guest.emit("msg", { t: "shot", turn: 2, p: { aimAngle: 0, force: 300, spinX: 0, spinY: 0 } }), host, "남의 턴 shot");
+  await expectDrop(() => guest.emit("msg", { t: "shot", turn: 2, p: { angle: 0, force: 300, spinX: 0, spinY: 0 } }), host, "남의 턴 shot");
   log("4. 역할·턴 위반 차단 OK (게스트 start/state, 남의 턴 shot)");
 
   // 스키마 위반: 힘 해킹, 순번 조작, 모르는 타입
-  await expectDrop(() => host.emit("msg", { t: "shot", turn: 2, p: { aimAngle: 0, force: 99999, spinX: 0, spinY: 0 } }), guest, "force 범위 밖");
-  await expectDrop(() => host.emit("msg", { t: "shot", turn: 7, p: { aimAngle: 0, force: 300, spinX: 0, spinY: 0 } }), guest, "턴 순번 건너뜀");
+  await expectDrop(() => host.emit("msg", { t: "shot", turn: 2, p: { angle: 0, force: 99999, spinX: 0, spinY: 0 } }), guest, "force 범위 밖");
+  await expectDrop(() => host.emit("msg", { t: "shot", turn: 7, p: { angle: 0, force: 300, spinX: 0, spinY: 0 } }), guest, "턴 순번 건너뜀");
   await expectDrop(() => host.emit("msg", { t: "hack", x: 1 }), guest, "모르는 타입");
   hs = await health();
   assert(hs.rooms[0].drops >= 5, "차단 카운트가 기록돼야 함 (drops=" + hs.rooms[0].drops + ")");
@@ -121,7 +125,7 @@ async function startServer() {
   host.emit("msg", { t: "state", turn: 1, s: [10, 5], cp: 1, over: false }); // 게스트에게 턴
   await sleep(100);
   const gotShot2 = once(host, "msg");
-  guest.emit("msg", { t: "shot", turn: 2, p: { aimAngle: 1.1, force: 500, spinX: 0.2, spinY: -0.3 } });
+  guest.emit("msg", { t: "shot", turn: 2, p: { angle: 1.1, force: 500, spinX: 0.2, spinY: -0.3 } });
   assert((await gotShot2).t === "shot", "정당한 게스트 shot이 릴레이돼야 함");
   host.emit("msg", { t: "sync", turn: 2, b: [[0.5, 0.5], [1, 1], [2, 2], [3, 3]] });
   host.emit("msg", { t: "state", turn: 2, s: [10, 5], cp: 0, over: false });
@@ -266,6 +270,77 @@ async function startServer() {
   assert(w4.waiting === true, "취소자와 매칭되면 안 됨 (q4는 대기여야 함)");
   q4.emit("quick-cancel");
   log("20. 빠른 대전 취소 OK — 취소자는 대기열에서 제외");
+
+  /* ========== B4: 공유 물리 단위 검증 ========== */
+  // 조준 샷: 흰 수구(-2.6, 0.5)에서 빨간 공(0,0)을 겨냥 → hits에 2가 있어야 함
+  {
+    const balls = Phys.initialBalls();
+    const angle = Math.atan2(0 - 0.5, 0 - (-2.6));
+    const r = Phys.simulateShot(balls, 0, { angle, force: 400, spinX: 0, spinY: 0 });
+    assert(r.hits.has(2), "조준한 빨간 공을 맞춰야 함 (hits=" + [...r.hits] + ")");
+    assert(r.steps > 0 && r.steps < 120 * 60, "시뮬레이션이 정상 종료돼야 함");
+    // 결정론: 같은 샷을 다시 굴리면 좌표가 완전히 일치
+    const balls2 = Phys.initialBalls();
+    Phys.simulateShot(balls2, 0, { angle, force: 400, spinX: 0, spinY: 0 });
+    balls.forEach((b, i) => assert(b.x === balls2[i].x && b.y === balls2[i].y, "결정론 위반: 공 " + i));
+    // 규칙: 빨간 공 1개만 → 0점 턴 넘김 / 상대 수구 → -5
+    const j1 = Rules.judgeShot(new Set([2]), 0, [0, 0], 0, 30);
+    assert(j1.delta === 0 && j1.nextPlayer === 1, "빨간 1개는 0점 + 턴 넘김");
+    const j2 = Rules.judgeShot(new Set([1, 2, 3]), 0, [3, 0], 0, 30);
+    assert(j2.delta === -5 && j2.scores[0] === 0, "상대 수구 파울 -5 (0점 밑으로는 안 내려감)");
+    const j3 = Rules.judgeShot(new Set([2, 3]), 0, [25, 0], 0, 30);
+    assert(j3.delta === 10 && j3.over === true, "빨간 2개 +10, 목표 도달 시 승리");
+  }
+  log("21. 공유 물리·규칙 OK — 조준 명중, 결정론(재실행 좌표 완전 일치), 4구 판정");
+
+  /* ========== B3: 전적 기록 + 랭킹 ========== */
+  // 정상 종료: 승자/패자 전적 기록
+  const nHost = io(URL);
+  const nGuest = io(URL);
+  nHost.emit("identify", { uid: "uid-test-winner-01", nick: "당구왕" });
+  nGuest.emit("identify", { uid: "uid-test-loser-01", nick: "도전자" });
+  await sleep(150);
+  const nh = await ack(nHost, "host");
+  await ack(nGuest, "join", nh.code);
+  nHost.emit("msg", { t: "start", target: 30 });
+  await sleep(100);
+  nHost.emit("msg", { t: "shot", turn: 1, p: { angle: 0.2, force: 400, spinX: 0, spinY: 0, frac: 0.5 } });
+  await sleep(200);
+  nHost.emit("msg", { t: "state", turn: 1, s: [30, 0], cp: 0, over: true }); // 호스트 승리 보고
+  await sleep(200);
+  let rank = await (await fetch(URL + "/ranking")).json();
+  assert(rank.top.length >= 1 && rank.top[0].nick === "당구왕" && rank.top[0].wins === 1, "승자가 랭킹 1위여야 함");
+  let me = await (await fetch(URL + "/player?uid=uid-test-loser-01")).json();
+  assert(me.ok && me.player.losses === 1 && me.player.wins === 0, "패자 전적이 기록돼야 함");
+  nHost.emit("leave"); nGuest.emit("leave");
+  log("22. 전적 기록 OK — 승/패 반영, 랭킹·내 전적 API");
+
+  // 몰수승도 전적에 기록
+  const fHost = io(URL);
+  const fGuest = io(URL);
+  fHost.emit("identify", { uid: "uid-test-forfeiter", nick: "탈주닌자" });
+  fGuest.emit("identify", { uid: "uid-test-survivor", nick: "생존자" });
+  await sleep(150);
+  const fh = await ack(fHost, "host");
+  await ack(fGuest, "join", fh.code);
+  fHost.emit("msg", { t: "start", target: 30 });
+  await sleep(100);
+  const fWin = once(fGuest, "forfeit-win");
+  fHost.disconnect(); // 호스트 탈주 → 유예 2초 → 게스트 몰수승
+  await fWin;
+  await sleep(200);
+  me = await (await fetch(URL + "/player?uid=uid-test-survivor")).json();
+  assert(me.ok && me.player.wins === 1, "몰수승이 승리로 기록돼야 함");
+  assert(me.player.recent[0].forfeit === 1, "몰수 표시가 남아야 함");
+  fGuest.emit("leave");
+  log("23. 몰수승 전적 기록 OK");
+
+  /* ========== B4: 서버 심판 가동 확인 ========== */
+  hs = await health();
+  assert(hs.judge && hs.judge.mode === "flag", "판정 모드는 기본 flag여야 함");
+  assert(hs.judge.shots >= 1, "서버가 샷을 시뮬레이션했어야 함 (shots=" + (hs.judge && hs.judge.shots) + ")");
+  log("24. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
+    + hs.judge.coordMiss + "건·점수 " + hs.judge.scoreMiss + "건 기록)");
 
   console.log("ALL PASS");
   serverProc.kill();
