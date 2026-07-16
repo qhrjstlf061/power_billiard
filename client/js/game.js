@@ -616,22 +616,27 @@ const Game = {
       });
     }
     // 걷기(H9-2): 기립 포즈 위에 다리 교차 스윙 + 왼팔 스윙 (오른팔은 큐를 듦)
-    if (c.walk) {
+    // F2-1: 프리롬 이동(내 조작 roaming / 상대 remoteRoaming)에도 같은 모션 적용
+    const walking = c.walk || c.roaming || c.remoteRoaming;
+    if (walking) {
       const sR = Math.sin(c.walkCycle);
       const sL = Math.sin(c.walkCycle + Math.PI);
       const liftR = Math.max(0, sR) * 0.07 * S;
       const liftL = Math.max(0, sL) * 0.07 * S;
-      pt.ankleR.x += sR * 0.22 * S; pt.ankleR.y += liftR;
-      pt.footR.x += sR * 0.22 * S;  pt.footR.y += liftR;
-      pt.kneeR.x += sR * 0.12 * S;  pt.kneeR.y += liftR * 0.5;
-      pt.ankleL.x += sL * 0.22 * S; pt.ankleL.y += liftL;
-      pt.footL.x += sL * 0.22 * S;  pt.footL.y += liftL;
-      pt.kneeL.x += sL * 0.12 * S;  pt.kneeL.y += liftL * 0.5;
+      // 걸음에 맞춰 몸 전체가 살짝 위아래로 (보행 바운스)
+      const bob = Math.abs(Math.sin(c.walkCycle)) * 0.025 * S;
+      for (const k in pt) pt[k].y += bob;
+      pt.ankleR.x += sR * 0.22 * S; pt.ankleR.y += liftR - bob;
+      pt.footR.x += sR * 0.22 * S;  pt.footR.y += liftR - bob;
+      pt.kneeR.x += sR * 0.12 * S;  pt.kneeR.y += liftR * 0.5 - bob * 0.5;
+      pt.ankleL.x += sL * 0.22 * S; pt.ankleL.y += liftL - bob;
+      pt.footL.x += sL * 0.22 * S;  pt.footL.y += liftL - bob;
+      pt.kneeL.x += sL * 0.12 * S;  pt.kneeL.y += liftL * 0.5 - bob * 0.5;
       pt.handL.x += sR * 0.12 * S;  // 왼팔은 오른다리와 같은 위상으로 스윙
       pt.elbowL.x += sR * 0.06 * S;
     }
     // 브리지 팔 IK(H11-3): 조준 중 왼손이 큐 위 브리지 지점을 향함 (닿는 한계까지)
-    if (c.bridgeTarget && !c.walk) {
+    if (c.bridgeTarget && !walking) {
       const r = this.solve2Bone(
         pt.shoulderL, c.bridgeTarget,
         1.07, 0.80, // 조준 포즈 기준 상완·전완 길이(유닛)
