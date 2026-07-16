@@ -1039,6 +1039,17 @@ const Game = {
     if (moving) {
       c.roaming = true;
       c.parked = false;
+      // F2-2: 시선 — 마우스가 가리키는 지점을 바라봄 (대기 시선과 같은 ±0.7rad 제한)
+      if (!this.isTouch) {
+        const look = this.pointerToTable(this.pointer.x, this.pointer.y);
+        if (look) {
+          c.group.updateMatrixWorld();
+          const local = c.group.worldToLocal(new THREE.Vector3(look.x, BALL_R, look.z));
+          c.eyeYaw = Math.max(-0.7, Math.min(0.7, Math.atan2(-local.z, local.x)));
+        }
+      } else {
+        c.eyeYaw = 0; // 터치 기기는 마우스가 없으니 진행 방향 정면
+      }
       c.walkCycle += dt * 6.5; // 걷기 모션 재사용
       this.refreshRig(c);
       this.holdCueVertical(c);
@@ -1069,6 +1080,7 @@ const Game = {
       x: Math.round(p.x * 1000) / 1000,
       z: Math.round(p.z * 1000) / 1000,
       yaw: Math.round(c.group.rotation.y * 1000) / 1000,
+      e: Math.round((c.eyeYaw || 0) * 100) / 100, // 시선도 상대 화면에 동기화
       m: moving
     });
   },
@@ -1098,6 +1110,7 @@ const Game = {
     if (animMoving) {
       c.remoteRoaming = true;
       c.parked = false;
+      c.eyeYaw = tgt.e || 0; // F2-2: 상대의 시선 방향 반영
       c.walkCycle += dt * 6.5;
       this.refreshRig(c);
       this.holdCueVertical(c);
@@ -2038,7 +2051,10 @@ const Game = {
         break;
       case "move": // F1: 상대의 자유 이동 좌표 (내 턴 동안 상대가 돌아다님)
         if (this.mode === "online" && Number.isFinite(msg.x) && Number.isFinite(msg.z) && Number.isFinite(msg.yaw)) {
-          this._remoteRoam = { x: msg.x, z: msg.z, yaw: msg.yaw, m: !!msg.m };
+          this._remoteRoam = {
+            x: msg.x, z: msg.z, yaw: msg.yaw, m: !!msg.m,
+            e: Number.isFinite(msg.e) ? Math.max(-0.7, Math.min(0.7, msg.e)) : 0
+          };
         }
         break;
       case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)

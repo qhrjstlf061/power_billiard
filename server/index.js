@@ -225,8 +225,9 @@ const VALIDATORS = {
     && num(m.cp, 0, 1) && num(m.turn, 0, 1e9) && (m.over === undefined || typeof m.over === "boolean"),
   rematch: () => true,
   bye: () => true,
-  // F1: 프리롬 이동 (연출 전용 — 세션 상태에 기록하지 않음)
-  move: (m) => num(m.x, -12, 12) && num(m.z, -12, 12) && num(m.yaw, -10, 10) && typeof m.m === "boolean"
+  // F1: 프리롬 이동 (연출 전용 — 세션 상태에 기록하지 않음). e = 시선 yaw (선택)
+  move: (m) => num(m.x, -12, 12) && num(m.z, -12, 12) && num(m.yaw, -10, 10)
+    && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71))
 };
 
 // 역할·턴 검증 — 서버가 세션 상태(R0)를 아는 덕분에 가능
