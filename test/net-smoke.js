@@ -341,11 +341,30 @@ async function startServer() {
   fGuest.emit("leave");
   log("23. 몰수승 전적 기록 OK");
 
+  /* ========== F1: 프리롬 move 메시지 ========== */
+  const rHost = io(URL);
+  const rGuest = io(URL);
+  const rh = await ack(rHost, "host");
+  await ack(rGuest, "join", rh.code);
+  rHost.emit("msg", { t: "start", target: 30 }); // cp=0 → 호스트 턴, 게스트가 대기 측
+  await sleep(100);
+  // 대기 측(게스트)의 move는 릴레이됨
+  const gotMove = once(rHost, "msg");
+  rGuest.emit("msg", { t: "move", x: 8.5, z: -5.2, yaw: 1.1, m: true });
+  const mv = (await gotMove);
+  assert(mv.t === "move" && mv.x === 8.5, "대기 측 move가 릴레이돼야 함");
+  // 차례인 쪽(호스트)의 move는 차단
+  await expectDrop(() => rHost.emit("msg", { t: "move", x: 1, z: -6, yaw: 0, m: true }), rGuest, "차례인 쪽의 move");
+  // 범위 밖 좌표 차단
+  await expectDrop(() => rGuest.emit("msg", { t: "move", x: 50, z: 0, yaw: 0, m: true }), rHost, "범위 밖 move");
+  rHost.emit("leave"); rGuest.emit("leave");
+  log("24. 프리롬 move OK — 대기 측만 릴레이, 턴 위반·범위 밖 차단");
+
   /* ========== B4: 서버 심판 가동 확인 ========== */
   hs = await health();
   assert(hs.judge && hs.judge.mode === "flag", "판정 모드는 기본 flag여야 함");
   assert(hs.judge.shots >= 1, "서버가 샷을 시뮬레이션했어야 함 (shots=" + (hs.judge && hs.judge.shots) + ")");
-  log("24. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
+  log("25. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
     + hs.judge.coordMiss + "건·점수 " + hs.judge.scoreMiss + "건 기록)");
 
   console.log("ALL PASS");

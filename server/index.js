@@ -224,7 +224,9 @@ const VALIDATORS = {
   state: (m) => Array.isArray(m.s) && m.s.length === 2 && m.s.every(x => num(x, 0, 10000))
     && num(m.cp, 0, 1) && num(m.turn, 0, 1e9) && (m.over === undefined || typeof m.over === "boolean"),
   rematch: () => true,
-  bye: () => true
+  bye: () => true,
+  // F1: 프리롬 이동 (연출 전용 — 세션 상태에 기록하지 않음)
+  move: (m) => num(m.x, -12, 12) && num(m.z, -12, 12) && num(m.yaw, -10, 10) && typeof m.m === "boolean"
 };
 
 // 역할·턴 검증 — 서버가 세션 상태(R0)를 아는 덕분에 가능
@@ -238,6 +240,8 @@ function allowedRole(room, idx, m) {
       return st.currentPlayer === idx && m.turn === st.turnNo + 1;
     case "aim":
       return st.currentPlayer === idx;
+    case "move": // 프리롬은 반대로 — 기다리는 쪽만 돌아다닐 수 있음
+      return st.currentPlayer !== idx;
     default:
       return true; // hello / rematch / bye는 양쪽 다 가능
   }
@@ -393,8 +397,8 @@ io.on("connection", (socket) => {
     const idx = room.players.findIndex(p => p && p.socketId === socket.id);
     if (idx < 0) return;
 
-    // R2-3: 레이트 리밋 — aim은 실시간 미리보기라 여유 있게, 나머지는 빡빡하게
-    if (obj.t === "aim") { if (!allowRate(socket, "aim", 15, 20)) return; }
+    // R2-3: 레이트 리밋 — aim/move는 실시간 스트림이라 여유 있게, 나머지는 빡빡하게
+    if (obj.t === "aim" || obj.t === "move") { if (!allowRate(socket, obj.t, 15, 20)) return; }
     else if (!allowRate(socket, "msg", 10, 10)) return logDrop(room, idx, obj, "rate");
 
     // R2-1: 스키마 검증 — 모르는 타입, 범위 밖 값은 릴레이하지 않음

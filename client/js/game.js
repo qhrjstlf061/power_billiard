@@ -927,9 +927,155 @@ const Game = {
     });
   },
 
+  /* ---------- F0/F1: 대기 중 자유 이동 (프리롬) ---------- */
+  // 순수 연출 — 공·판정·턴에 영향 없음. 상대 턴 동안 내 캐릭터를 WASD로 조작.
+  ROAM: {
+    speed: 1.5 * 3.66,          // 턴 교대 걷기와 같은 속도
+    tableX: 6.3, tableZ: 3.7,   // 테이블 회피 사각형 (computeWalkPath와 동일)
+    floorX: 11, floorZ: 8       // 돌아다닐 수 있는 바닥 범위
+  },
+
+  canFreeRoam() {
+    return this.mode === "online" && this.state !== "MENU" && !this.netPaused
+      && !this.isMyTurn() && !!this.chars[this.myIdx] && !this.chars[this.myIdx].walk;
+  },
+
+  roamAllowedPos(x, z) {
+    const R = this.ROAM;
+    if (Math.abs(x) > R.floorX || Math.abs(z) > R.floorZ) return false; // 바닥 밖
+    if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) return false; // 테이블 안
+    return true;
+  },
+
+  updateFreeRoam(dt) {
+    if (this.mode !== "online") return;
+    const c = this.chars[this.myIdx];
+    if (!c) return;
+
+    const can = this.canFreeRoam();
+    // 첫 대기 턴 3초 뒤 조작법 힌트 (시작 토스트를 덮지 않게 지연)
+    if (can && !this._roamHintShown) {
+      this._roamHintT = (this._roamHintT || 0) + dt;
+      if (this._roamHintT > 3) {
+        this._roamHintShown = true;
+        this.showToast("⌨️ 상대 턴 — WASD로 당구장을 돌아다닐 수 있어요!");
+      }
+    }
+
+    const k = this.keys || {};
+    const inF = (k.f ? 1 : 0) - (k.b ? 1 : 0); // 앞/뒤 (카메라 기준)
+    const inR = (k.r ? 1 : 0) - (k.l ? 1 : 0); // 오른쪽/왼쪽
+    let moving = false;
+
+    if (can && (inF !== 0 || inR !== 0)) {
+      // 카메라가 보는 방향을 바닥에 투영해 이동 기준으로 사용
+      const dir = new THREE.Vector3();
+      this.camera.getWorldDirection(dir);
+      let fx = dir.x, fz = dir.z;
+      const fl = Math.hypot(fx, fz) || 1;
+      fx /= fl; fz /= fl;
+      const rx = -fz, rz = fx; // 오른쪽 = forward × up
+
+      let mx = fx * inF + rx * inR;
+      let mz = fz * inF + rz * inR;
+      const ml = Math.hypot(mx, mz);
+      if (ml > 1e-6) {
+        mx /= ml; mz /= ml;
+        const step = this.ROAM.speed * dt;
+        const p = c.group.position;
+        // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행
+        const nx = p.x + mx * step;
+        if (this.roamAllowedPos(nx, p.z)) p.x = nx;
+        const nz = p.z + mz * step;
+        if (this.roamAllowedPos(p.x, nz)) p.z = nz;
+
+        // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
+        const targetYaw = Math.atan2(-mz, mx);
+        let dy = targetYaw - c.group.rotation.y;
+        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        c.group.rotation.y += dy * Math.min(1, dt * 10);
+        moving = true;
+      }
+    }
+
+    if (moving) {
+      c.roaming = true;
+      c.parked = false;
+      c.walkCycle += dt * 6.5; // 걷기 모션 재사용
+      this.refreshRig(c);
+      this.holdCueVertical(c);
+    } else if (c.roaming) {
+      c.roaming = false;
+      if (!c.walk) { // 턴 교대 걷기가 시작됐다면 그쪽에 양보
+        c.walkCycle = 0;
+        this.refreshRig(c);
+        this.holdCueVertical(c);
+        c.parked = true; // 대기 모션 복귀
+      }
+    }
+
+    this.sendRoamMove(dt, c, moving);
+  },
+
+  // F1: 내 위치를 10Hz로 상대에게 전송 (움직일 때 + 멈춘 직후 1회)
+  sendRoamMove(dt, c, moving) {
+    if (!Net.active) return;
+    this._roamSendT = (this._roamSendT || 0) + dt;
+    if (this._roamSendT < 0.1) return;
+    if (!moving && (!this._roamLast || this._roamLast.m === false)) return;
+    this._roamSendT = 0;
+    this._roamLast = { m: moving };
+    const p = c.group.position;
+    Net.send({
+      t: "move",
+      x: Math.round(p.x * 1000) / 1000,
+      z: Math.round(p.z * 1000) / 1000,
+      yaw: Math.round(c.group.rotation.y * 1000) / 1000,
+      m: moving
+    });
+  },
+
+  // F1 수신: 상대 캐릭터를 목표 좌표로 부드럽게 보간
+  updateRemoteRoam(dt) {
+    if (this.mode !== "online") return;
+    const idx = 1 - this.myIdx;
+    const c = this.chars[idx];
+    const tgt = this._remoteRoam;
+    if (!c || !tgt || c.walk || this.activeIdx === idx) return; // 턴 교대·활성 캐릭터가 우선
+
+    const p = c.group.position;
+    const dx = tgt.x - p.x, dz = tgt.z - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 3) { p.x = tgt.x; p.z = tgt.z; } // 크게 밀리면 스냅
+    else if (dist > 0.005) {
+      const lerp = Math.min(1, dt * 10);
+      p.x += dx * lerp;
+      p.z += dz * lerp;
+    }
+    let dy = tgt.yaw - c.group.rotation.y;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    c.group.rotation.y += dy * Math.min(1, dt * 10);
+
+    const animMoving = tgt.m || dist > 0.15;
+    if (animMoving) {
+      c.remoteRoaming = true;
+      c.parked = false;
+      c.walkCycle += dt * 6.5;
+      this.refreshRig(c);
+      this.holdCueVertical(c);
+    } else if (c.remoteRoaming) {
+      c.remoteRoaming = false;
+      c.walkCycle = 0;
+      this.refreshRig(c);
+      this.holdCueVertical(c);
+      c.parked = true;
+    }
+  },
+
   // H8: 턴 교대 — 새 플레이어가 테이블로, 이전 플레이어는 대기 위치로
   setActiveChar(i) {
     if (this.mode === "solo") i = 0;
+    this._remoteRoam = null; // F1: 턴이 바뀌면 이전 프리롬 목표는 무효
     if (this.activeIdx === i) return;
     const oldIdx = this.activeIdx;
     const oldC = this.chars[oldIdx];
@@ -1659,6 +1805,8 @@ const Game = {
   update(dt) {
     this.updateWalkers(dt);   // 걷는 캐릭터 이동 (H9)
     this.updateIdleChars(dt); // 대기 캐릭터는 어느 상태에서든 살아 움직임
+    this.updateFreeRoam(dt);   // F0: 상대 턴 자유 이동 (내 캐릭터)
+    this.updateRemoteRoam(dt); // F1: 상대의 자유 이동 반영
 
     if (this.state === "MENU") return; // 시작/승리 화면에서는 정지
 
@@ -1848,6 +1996,11 @@ const Game = {
             this.players[1 - this.myIdx].name = Net.peerNick;
             this.setupScoreboard();
           }
+        }
+        break;
+      case "move": // F1: 상대의 자유 이동 좌표 (내 턴 동안 상대가 돌아다님)
+        if (this.mode === "online" && Number.isFinite(msg.x) && Number.isFinite(msg.z) && Number.isFinite(msg.yaw)) {
+          this._remoteRoam = { x: msg.x, z: msg.z, yaw: msg.yaw, m: !!msg.m };
         }
         break;
       case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)
@@ -2089,6 +2242,22 @@ const Game = {
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this.cancelCharge(); // ESC = 샷 취소
     });
+
+    // F0: 프리롬 이동 키 (WASD/방향키) — 닉네임·코드 입력칸은 stopPropagation으로 제외됨
+    this.keys = {};
+    const roamKeyMap = {
+      KeyW: "f", ArrowUp: "f", KeyS: "b", ArrowDown: "b",
+      KeyA: "l", ArrowLeft: "l", KeyD: "r", ArrowRight: "r"
+    };
+    window.addEventListener("keydown", (e) => {
+      const k = roamKeyMap[e.code];
+      if (k) this.keys[k] = true;
+    });
+    window.addEventListener("keyup", (e) => {
+      const k = roamKeyMap[e.code];
+      if (k) this.keys[k] = false;
+    });
+    window.addEventListener("blur", () => { this.keys = {}; }); // 탭 전환 시 눌림 해제
     dom.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // 시점 토글: 기본 ↔ 탑뷰 (버튼 라벨은 "전환하면 보게 될 시점")
