@@ -1,0 +1,15 @@
+# Render 배포 설정 (R4) — 이 저장소를 Render에 Blueprint로 연결하면 자동 적용
+# 무료 티어: 15분 미접속 시 슬립 → 첫 접속 때 ~30초 웨이크 (클라이언트에 안내 UX 있음)
+services:
+  - type: web
+    name: power-billiard
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # 클라이언트를 이 서버가 직접 서빙하므로 CORS는 기본(전체 허용)이어도 안전하지만,
+      # GitHub Pages에서도 서빙할 거라면 그 주소를 지정:
+      - key: ALLOWED_ORIGINS
+        value: https://qhrjstlf061.github.io

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>3D 4구 당구</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<div class="hud" id="hud-top">
+  <div class="spacer"></div>
+  <div class="btns">
+    <button id="btn-view" title="시점 전환">탑뷰</button>
+    <button id="btn-reset" title="다시하기">↺</button>
+    <button id="btn-menu" title="메뉴">☰</button>
+  </div>
+</div>
+
+<div class="hud" id="scoreboard">
+  <div class="sb-row">
+    <div class="pp active" id="pp0">
+      <span class="pp-name" id="pp0-name">SCORE</span>
+      <span class="pp-score" id="pp0-score">0</span>
+    </div>
+    <div class="sb-mid" id="sb-mid" style="display:none">목표<br><b id="target-label">30</b>점</div>
+    <div class="pp" id="pp1" style="display:none">
+      <span class="pp-name" id="pp1-name">🟡 플레이어 2</span>
+      <span class="pp-score" id="pp1-score">0</span>
+    </div>
+  </div>
+  <span id="score-delta"></span>
+</div>
+
+<div class="hud" id="spin-widget">
+  <button id="spin-reset" title="무회전으로 리셋">⟲</button>
+  <div id="spin-ball">
+    <div id="spin-dot"></div>
+  </div>
+</div>
+
+<div class="overlay show" id="overlay-start">
+  <div class="overlay-card">
+    <h1>🎱 3D 4구 당구</h1>
+    <p>
+      내 수구로 <b style="color:#ff8a80">빨간 공 2개</b>를 모두 맞히면 <b>+10점</b>,<br>
+      상대 수구를 맞히면 <b style="color:#e57373">파울 −5점</b>입니다.<br>
+      득점하면 내 턴이 이어지고, 실패하면 상대에게 넘어갑니다.
+    </p>
+    <div class="target-row">
+      목표 점수:
+      <button class="target-chip" data-target="20">20</button>
+      <button class="target-chip active" data-target="30">30</button>
+      <button class="target-chip" data-target="50">50</button>
+    </div>
+    <div class="mode-btns">
+      <button class="btn-solo" id="btn-mode-solo">🙋 1인 연습</button>
+      <button class="btn-versus" id="btn-mode-versus">⚔️ 2인 대결</button>
+    </div>
+    <div class="online-box">
+      <div class="online-row">
+        <button class="btn-online" id="btn-online-host">🌐 방 만들기</button>
+        <input id="online-code" placeholder="초대 코드" maxlength="6" autocomplete="off">
+        <button class="btn-online" id="btn-online-join">입장</button>
+      </div>
+      <button class="btn-online" id="btn-online-resume" style="display:none">⏪ 진행 중이던 게임 복귀</button>
+      <p id="online-status">온라인 대결: 방을 만들어 코드를 공유하거나, 받은 코드로 입장하세요</p>
+    </div>
+    <p>마우스 이동: 조준 · 좌클릭 꾹: 힘 충전 → 놓으면 발사<br>충전 중 우클릭/ESC: 샷 취소 · 우클릭 드래그: 시점 회전 · 휠: 줌</p>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-win">
+  <div class="overlay-card">
+    <h1 id="win-title">🏆 승리!</h1>
+    <p id="win-desc"></p>
+    <div class="mode-btns">
+      <button class="btn-versus" id="btn-rematch">🔄 다시하기</button>
+      <button class="btn-gray" id="btn-tomenu">메뉴로</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-pause">
+  <div class="overlay-card">
+    <h1>📡 연결 대기</h1>
+    <p id="pause-desc"></p>
+    <p><b id="pause-count" style="color:#ffd54f; font-size:1.3rem"></b></p>
+    <div class="mode-btns">
+      <button class="btn-gray" id="btn-pause-menu">그만두고 메뉴로</button>
+    </div>
+  </div>
+</div>
+
+<div class="hud" id="hud-bottom">
+  <div id="power-gauge">
+    <div id="power-fill"></div>
+    <span id="power-label"></span>
+  </div>
+</div>
+
+<div class="hud" id="toast"></div>
+<div id="fx-flash"></div>
+<div id="ping-badge"></div>
+
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script src="config.js"></script>
+<script>
+// socket.io 클라이언트는 백엔드가 제공 — 분리 서빙(GitHub Pages 등) 시 BILLIARD_SERVER에서 로드
+document.write('<script src="' + (window.BILLIARD_SERVER || "") + '/socket.io/socket.io.js"><\/script>');
+</script>
+<script src="js/net.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

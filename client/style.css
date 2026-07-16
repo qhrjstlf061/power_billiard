@@ -1,0 +1,238 @@
+* { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #12121e;
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    color: #eee;
+    -webkit-user-select: none; user-select: none;
+  }
+  #game-container { position: fixed; inset: 0; }
+  #game-container canvas { display: block; touch-action: none; }
+
+  .hud { position: fixed; z-index: 10; }
+
+  #hud-top {
+    top: 0; left: 0; right: 0;
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px;
+    background: linear-gradient(180deg, rgba(10,10,20,0.75), rgba(10,10,20,0));
+    pointer-events: none;
+  }
+  #hud-top .spacer { flex: 1; }
+  #hud-top .btns { display: flex; gap: 8px; pointer-events: auto; }
+
+  /* 중앙 스코어보드 — 심플 플랫 패널 */
+  #scoreboard {
+    position: fixed; z-index: 11;
+    top: 10px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 5px 10px;
+    background: rgba(8, 8, 22, 0.6);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 12px;
+    pointer-events: none;
+  }
+  .sb-row { display: flex; align-items: stretch; gap: 10px; }
+  .pp {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 84px; padding: 3px 10px 1px;
+    border-radius: 9px; border: 2px solid transparent;
+    opacity: 0.5; transition: opacity 0.25s, border-color 0.25s;
+  }
+  .pp.active {
+    opacity: 1;
+    border-color: rgba(255,255,255,0.4);
+  }
+  .pp-name { font-size: 0.7rem; color: #cfcfdc; font-weight: 600; }
+  .pp-score {
+    font-size: 1.9rem; font-weight: 800; color: #ffd54f;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+    transition: transform 0.18s ease, color 0.25s;
+  }
+  .pp-score.pop { transform: scale(1.3); }
+  .pp-score.gain { color: #81c784; }
+  .pp-score.foul { color: #e57373; }
+  .sb-mid {
+    display: flex; flex-direction: column; justify-content: center;
+    font-size: 0.66rem; color: #9a9ab0; text-align: center; line-height: 1.4;
+  }
+  .sb-mid b { color: #ffd54f; font-size: 0.85rem; }
+  #score-delta {
+    position: absolute; right: 2px; top: 4px;
+    font-size: 1.15rem; font-weight: 800;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s, transform 0.9s ease-out;
+  }
+  #score-delta.fly {
+    opacity: 1; transform: translateY(-26px);
+  }
+  #score-delta.gain { color: #81c784; }
+  #score-delta.foul { color: #e57373; }
+
+  /* 당점(스핀) 선택 위젯 — 우측 상단, 미니멀 */
+  #spin-widget {
+    top: 58px; right: 14px;
+    padding: 8px;
+    background: rgba(8, 8, 22, 0.6);
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 12px;
+    pointer-events: auto;
+    z-index: 11;
+  }
+  #spin-reset {
+    position: absolute; top: -7px; right: -7px;
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(20,20,40,0.9); color: #ddd;
+    font-size: 0.75rem; line-height: 1; cursor: pointer;
+  }
+  #spin-reset:hover { background: rgba(70,70,120,0.9); }
+  #spin-ball {
+    position: relative; width: 72px; height: 72px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffffff, #d8d2c4 65%, #a49e90);
+    box-shadow: inset 0 -6px 10px rgba(0,0,0,0.22);
+    cursor: crosshair; touch-action: none;
+  }
+  #spin-ball::before, #spin-ball::after {
+    content: ""; position: absolute; background: rgba(0,0,0,0.14);
+  }
+  #spin-ball::before { left: 50%; top: 6%; bottom: 6%; width: 1px; }
+  #spin-ball::after { top: 50%; left: 6%; right: 6%; height: 1px; }
+  #spin-dot {
+    position: absolute; left: 50%; top: 50%;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #d32f2f; border: 2px solid #fff;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: transform 0.06s linear;
+  }
+
+  /* 시작 / 승리 오버레이 */
+  .overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(8, 8, 20, 0.66);
+    backdrop-filter: blur(3px);
+  }
+  .overlay.show { display: flex; }
+  .overlay-card {
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    padding: 34px 46px;
+    background: rgba(16, 16, 34, 0.95);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    text-align: center;
+    max-width: 90vw;
+  }
+  .overlay-card h1 { margin: 0; font-size: 1.7rem; }
+  .overlay-card p { margin: 0; color: #9a9ab0; font-size: 0.88rem; line-height: 1.7; }
+  .target-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #bbb; }
+  .target-chip {
+    padding: 6px 16px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: transparent; color: #ddd; font-size: 0.85rem;
+  }
+  .target-chip.active {
+    background: #ffd54f; color: #222; border-color: #ffd54f; font-weight: 700;
+  }
+  .mode-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .mode-btns button {
+    padding: 14px 28px; font-size: 1rem; font-weight: 700;
+    border: none; border-radius: 12px; cursor: pointer; color: #fff;
+  }
+  .btn-solo { background: #2e7d32; }
+  .btn-solo:hover { background: #388e3c; }
+  .btn-versus { background: #1565c0; }
+  .btn-versus:hover { background: #1976d2; }
+  .btn-gray { background: #555; }
+  .btn-gray:hover { background: #666; }
+  #win-title { font-size: 1.9rem; margin: 0; }
+
+  /* 온라인 대결 (N1) */
+  .online-box {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.15);
+    width: 100%;
+  }
+  .online-row { display: flex; gap: 8px; align-items: center; }
+  .btn-online {
+    padding: 10px 16px; font-size: 0.9rem; font-weight: 700;
+    border: none; border-radius: 10px; cursor: pointer; color: #fff;
+    background: #7b1fa2;
+  }
+  .btn-online:hover { background: #8e24aa; }
+  #online-code {
+    width: 110px; padding: 9px 10px; font-size: 0.95rem; text-align: center;
+    letter-spacing: 3px; text-transform: uppercase;
+    border: 1px solid rgba(255,255,255,0.35); border-radius: 10px;
+    background: rgba(255,255,255,0.08); color: #fff; outline: none;
+  }
+  #online-status { min-height: 1.2em; font-size: 0.82rem !important; color: #b39ddb !important; }
+  #hud-top button {
+    padding: 7px 14px; font-size: 0.85rem;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(20,20,40,0.6); color: #eee;
+    border-radius: 999px; cursor: pointer;
+  }
+  #hud-top button:hover { background: rgba(70,70,120,0.7); }
+
+  #hud-bottom {
+    bottom: 0; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 12px 16px 16px;
+    background: linear-gradient(0deg, rgba(10,10,20,0.75), rgba(10,10,20,0));
+    pointer-events: none;
+  }
+  #power-gauge {
+    position: relative; width: 260px; max-width: 60vw; height: 14px;
+    background: rgba(255,255,255,0.13);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 7px; overflow: hidden;
+    opacity: 0; transition: opacity 0.2s; /* 충전 중에만 표시 */
+  }
+  #power-gauge.active { opacity: 1; }
+  #power-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #81c784, #ffd54f, #e57373);
+  }
+  #power-label {
+    position: absolute; inset: 0; text-align: center;
+    font-size: 0.68rem; line-height: 14px; color: #fff; font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+  }
+
+  #toast {
+    top: 18%; left: 50%; transform: translateX(-50%);
+    padding: 12px 26px;
+    background: rgba(15,15,30,0.85);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 12px;
+    font-size: 1.05rem; font-weight: 600;
+    opacity: 0; transition: opacity 0.35s;
+    pointer-events: none; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; }
+
+  /* 득점/파울 화면 가장자리 플래시 */
+  #fx-flash {
+    position: fixed; inset: 0; z-index: 15; pointer-events: none;
+    opacity: 0; transition: opacity 0.55s;
+  }
+  #fx-flash.gain { background: radial-gradient(ellipse at center, transparent 55%, rgba(129,199,132,0.45)); }
+  #fx-flash.foul { background: radial-gradient(ellipse at center, transparent 55%, rgba(229,115,115,0.5)); }
+  #fx-flash.on { opacity: 1; transition: opacity 0.05s; }
+
+  /* R3: 연결 품질(핑) 배지 — 온라인 대결 중에만 표시 */
+  #ping-badge {
+    position: fixed; left: 12px; bottom: 12px; z-index: 12;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 0.72rem; font-variant-numeric: tabular-nums;
+    background: rgba(8, 8, 22, 0.6);
+    border: 1px solid rgba(255,255,255,0.16);
+    display: none; pointer-events: none;
+  }
+  #ping-badge.good { color: #81c784; }
+  #ping-badge.warn { color: #ffd54f; }
+  #ping-badge.bad  { color: #e57373; }
