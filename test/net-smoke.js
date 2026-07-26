@@ -360,11 +360,40 @@ async function startServer() {
   rHost.emit("leave"); rGuest.emit("leave");
   log("24. 프리롬 move OK — 대기 측만 릴레이, 턴 위반·범위 밖 차단");
 
+  /* ========== E1: 이모트·빠른 채팅 ========== */
+  const eHost = io(URL);
+  const eGuest = io(URL);
+  const ehr = await ack(eHost, "host");
+  await ack(eGuest, "join", ehr.code);
+  eHost.emit("msg", { t: "start", target: 30 });
+  await sleep(100);
+  // 정상 릴레이: 양방향, 턴과 무관
+  const gotEmote = once(eGuest, "msg");
+  eHost.emit("msg", { t: "emote", id: 3 });
+  const em = await gotEmote;
+  assert(em.t === "emote" && em.id === 3, "emote 릴레이 실패");
+  const gotChat = once(eHost, "msg");
+  eGuest.emit("msg", { t: "chat", id: 1 });
+  assert((await gotChat).t === "chat", "chat 릴레이 실패");
+  // 스키마 방어: 범위 밖·비정수 id
+  await expectDrop(() => eGuest.emit("msg", { t: "emote", id: 99 }), eHost, "범위 밖 emote id");
+  await expectDrop(() => eGuest.emit("msg", { t: "emote", id: 1.5 }), eHost, "비정수 emote id");
+  // 도배 방지: 연발 시 버스트(3개) 수준만 통과
+  let emoteCount = 0;
+  const ef = (m) => { if (m.t === "emote") emoteCount++; };
+  eGuest.on("msg", ef);
+  for (let i = 0; i < 10; i++) eHost.emit("msg", { t: "emote", id: 0 });
+  await sleep(400);
+  eGuest.off("msg", ef);
+  assert(emoteCount >= 1 && emoteCount <= 4, "emote 도배가 제한돼야 함 (통과=" + emoteCount + "/10)");
+  eHost.emit("leave"); eGuest.emit("leave");
+  log("25. 이모트·빠른 채팅 OK — 양방향 릴레이, id 검증, 도배 제한(" + emoteCount + "/10 통과)");
+
   /* ========== B4: 서버 심판 가동 확인 ========== */
   hs = await health();
   assert(hs.judge && hs.judge.mode === "flag", "판정 모드는 기본 flag여야 함");
   assert(hs.judge.shots >= 1, "서버가 샷을 시뮬레이션했어야 함 (shots=" + (hs.judge && hs.judge.shots) + ")");
-  log("25. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
+  log("26. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
     + hs.judge.coordMiss + "건·점수 " + hs.judge.scoreMiss + "건 기록)");
 
   console.log("ALL PASS");

@@ -227,7 +227,10 @@ const VALIDATORS = {
   bye: () => true,
   // F1: 프리롬 이동 (연출 전용 — 세션 상태에 기록하지 않음). e = 시선 yaw (선택)
   move: (m) => num(m.x, -12, 12) && num(m.z, -12, 12) && num(m.yaw, -10, 10)
-    && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71))
+    && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71)),
+  // E1: 이모트·빠른 채팅 — 정해진 id만 (자유 텍스트 없음 → 욕설·도배 원천 차단)
+  emote: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
+  chat: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16
 };
 
 // 역할·턴 검증 — 서버가 세션 상태(R0)를 아는 덕분에 가능
@@ -398,8 +401,12 @@ io.on("connection", (socket) => {
     const idx = room.players.findIndex(p => p && p.socketId === socket.id);
     if (idx < 0) return;
 
-    // R2-3: 레이트 리밋 — aim/move는 실시간 스트림이라 여유 있게, 나머지는 빡빡하게
+    // R2-3: 레이트 리밋 — aim/move는 실시간 스트림이라 여유 있게, 나머지는 빡빡하게.
+    // E1: 이모트/채팅은 도배 방지용으로 별도 버킷 (약 1.4초당 1개, 버스트 3)
     if (obj.t === "aim" || obj.t === "move") { if (!allowRate(socket, obj.t, 15, 20)) return; }
+    else if (obj.t === "emote" || obj.t === "chat") {
+      if (!allowRate(socket, "social", 0.7, 3)) return logDrop(room, idx, obj, "rate");
+    }
     else if (!allowRate(socket, "msg", 10, 10)) return logDrop(room, idx, obj, "rate");
 
     // R2-1: 스키마 검증 — 모르는 타입, 범위 밖 값은 릴레이하지 않음

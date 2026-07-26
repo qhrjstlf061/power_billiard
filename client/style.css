@@ -294,6 +294,42 @@
   .rank-nick { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rank-rec { color: #9a9ab0; font-variant-numeric: tabular-nums; }
 
+  /* E: 이모트·빠른 채팅 — 온라인 대결 중 좌측 하단 (핑 배지 위) */
+  #social-box {
+    left: 12px; bottom: 44px; z-index: 13;
+    display: none;
+  }
+  #social-toggle {
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(8, 8, 22, 0.65); font-size: 1.35rem;
+    cursor: pointer; line-height: 1;
+  }
+  #social-toggle:hover { background: rgba(70,70,120,0.7); }
+  #social-panel {
+    display: none; position: absolute; left: 0; bottom: 54px;
+    flex-direction: column; gap: 8px;
+    padding: 10px;
+    background: rgba(8, 8, 22, 0.88);
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 14px;
+    max-height: 60vh; overflow-y: auto;
+  }
+  #social-panel.open { display: flex; }
+  #emote-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .emote-btn {
+    font-size: 1.35rem; padding: 6px 8px; line-height: 1;
+    background: rgba(255,255,255,0.08); border: none; border-radius: 10px; cursor: pointer;
+  }
+  .emote-btn:hover { background: rgba(255,255,255,0.22); }
+  #chat-col { display: flex; flex-direction: column; gap: 5px; }
+  .chat-btn {
+    padding: 7px 12px; font-size: 0.8rem; font-weight: 600; color: #eee; text-align: left;
+    background: rgba(255,255,255,0.08); border: none; border-radius: 8px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .chat-btn:hover { background: rgba(255,255,255,0.22); }
+
   /* F2: 모바일 프리롬 조이스틱 — 터치 기기 + 상대 턴에만 표시 */
   #joystick {
     position: fixed; right: 26px; bottom: 30px; z-index: 12;

@@ -248,6 +248,10 @@ const Game = {
   flash: [],
   pointer: { x: 0, y: 0 },
 
+  // E1: 이모트·빠른 채팅 — id로만 주고받음 (서버 VALIDATORS의 id < 16 안에서 추가 가능)
+  EMOTES: ["👍", "😂", "😮", "😭", "🔥", "👏", "🙏", "😎"],
+  CHATS: ["안녕하세요! 🙌", "굿샷! 👏", "아깝다! 😅", "행운을 빌어요 🍀", "잠시만요 ⏳", "잘 쳤어요! GG 🎱"],
+
   /* ---------- 3D 씬 ---------- */
   init3D() {
     const container = document.getElementById("game-container");
@@ -634,6 +638,18 @@ const Game = {
       pt.kneeL.x += sL * 0.12 * S;  pt.kneeL.y += liftL * 0.5 - bob * 0.5;
       pt.handL.x += sR * 0.12 * S;  // 왼팔은 오른다리와 같은 위상으로 스윙
       pt.elbowL.x += sR * 0.06 * S;
+    }
+    // E3: 승리 세리머니 — 왼팔을 머리 위로 뻗어 좌우로 흔드는 만세
+    if (c.cheer) {
+      const wv = Math.sin(c.cheer.t * 9);
+      const target = new THREE.Vector3(
+        pt.head.x + 0.12 * S,
+        pt.head.y + (0.38 + 0.06 * wv) * S,
+        pt.head.z - (0.16 - 0.12 * wv) * S
+      );
+      const r = this.solve2Bone(pt.shoulderL, target, 0.95, 0.88, new THREE.Vector3(1, 0, -0.4));
+      pt.elbowL.copy(r.elbow);
+      pt.handL.copy(r.hand);
     }
     // 브리지 팔 IK(H11-3): 조준 중 왼손이 큐 위 브리지 지점을 향함 (닿는 한계까지)
     if (c.bridgeTarget && !walking) {
@@ -1308,6 +1324,7 @@ const Game = {
     this.cueAnim = null;
     this.standAnim = null;
     this.currentShot = null;
+    this.clearSocialFx(); // E: 이전 판의 세리머니·말풍선·색종이 정리
     this.layoutBalls();
     this.state = "AIM";
     this.aimAngle = 0;
@@ -1345,6 +1362,7 @@ const Game = {
     this.onNetResume(); // R1: 일시정지 오버레이가 떠 있었다면 정리
     this.state = "MENU";
     this.charging = null;
+    this.clearSocialFx(); // E: 세리머니·말풍선·색종이 정리
     this.updateGauge(0);
     document.getElementById("overlay-win").classList.remove("show");
     document.getElementById("overlay-start").classList.add("show");
@@ -1750,7 +1768,267 @@ const Game = {
     document.getElementById("win-title").textContent = `🏆 ${player.icon} ${player.name} 승리!`;
     document.getElementById("win-desc").textContent =
       `${player.score} : ${other.score} — 목표 ${this.targetScore}점 선취!`;
-    document.getElementById("overlay-win").classList.add("show");
+    // E3: 승리 세리머니 — 승자가 만세·점프하는 동안 무대를 보여준 뒤 결과 창
+    const delay = this.startCeremony(this.players.indexOf(player));
+    clearTimeout(this._winTimer);
+    this._winTimer = setTimeout(() => {
+      if (this.state === "MENU") document.getElementById("overlay-win").classList.add("show");
+    }, delay);
+  },
+
+  /* ---------- E: 이모트·빠른 채팅 & 승리 세리머니 ---------- */
+  buildSocialUI() {
+    const row = document.getElementById("emote-row");
+    this.EMOTES.forEach((e, i) => {
+      const b = document.createElement("button");
+      b.className = "emote-btn";
+      b.textContent = e;
+      b.addEventListener("click", () => this.sendSocial("emote", i));
+      row.appendChild(b);
+    });
+    const col = document.getElementById("chat-col");
+    this.CHATS.forEach((txt, i) => {
+      const b = document.createElement("button");
+      b.className = "chat-btn";
+      b.textContent = txt;
+      b.addEventListener("click", () => this.sendSocial("chat", i));
+      col.appendChild(b);
+    });
+    document.getElementById("social-toggle").addEventListener("click", () => {
+      Sound.ensure();
+      document.getElementById("social-panel").classList.toggle("open");
+    });
+  },
+
+  // 온라인 대결 중에만 이모트 버튼 표시 (매 프레임 호출되므로 상태 캐시)
+  _socialShown: null,
+  updateSocialUI() {
+    const show = this.mode === "online" && Net.active && this.state !== "MENU";
+    if (show === this._socialShown) return;
+    this._socialShown = show;
+    const box = document.getElementById("social-box");
+    if (box) box.style.display = show ? "block" : "none";
+    if (!show) document.getElementById("social-panel").classList.remove("open");
+  },
+
+  sendSocial(kind, id) {
+    const now = performance.now();
+    // 서버 레이트 리밋(1.4초당 1개)에 맞춘 클라 쿨다운 — 차단당해 상대에게만 안 보이는 상황 방지
+    if (this._socialAt && now - this._socialAt < 1500) {
+      this.showToast("⏳ 이모트는 잠시 후 다시 보낼 수 있어요");
+      return;
+    }
+    this._socialAt = now;
+    document.getElementById("social-panel").classList.remove("open");
+    Net.send({ t: kind, id });
+    this.playSocial(this.myIdx, kind, id);
+  },
+
+  // 내 것이든 상대 것이든 같은 연출: 해당 캐릭터 머리 위 말풍선 + 효과음
+  playSocial(idx, kind, id) {
+    if (kind === "emote") {
+      const e = this.EMOTES[id];
+      if (!e) return;
+      this.spawnBubble(idx, { emoji: e });
+      Sound.tones([740, 988], { step: 0.05, dur: 0.15, vol: 0.12 });
+    } else {
+      const txt = this.CHATS[id];
+      if (!txt) return;
+      this.spawnBubble(idx, { text: txt });
+      Sound.tones([620], { step: 0, dur: 0.12, vol: 0.1 });
+    }
+  },
+
+  // 캐릭터 머리 위 3D 말풍선 — 캔버스에 그려 스프라이트로 띄움 (캐릭터를 따라다님)
+  spawnBubble(idx, opt) {
+    const c = this.chars[idx];
+    if (!c || !c.group.visible) { // 캐릭터가 없는 상황(솔로 등)엔 토스트로 대체
+      if (opt.text) this.showToast("💬 " + opt.text);
+      return;
+    }
+    this.removeBubble(c);
+    const cv = document.createElement("canvas");
+    let ctx = cv.getContext("2d");
+    let w, h;
+    if (opt.emoji) {
+      cv.width = cv.height = 144;
+      ctx = cv.getContext("2d");
+      ctx.font = "104px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(opt.emoji, 72, 80);
+      w = h = 1.5;
+    } else {
+      const font = "700 32px 'Segoe UI', 'Malgun Gothic', sans-serif";
+      ctx.font = font;
+      const tw = Math.ceil(ctx.measureText(opt.text).width);
+      cv.width = tw + 52;
+      cv.height = 88; // 몸통 64 + 꼬리 여유
+      ctx = cv.getContext("2d"); // 캔버스 리사이즈로 초기화된 컨텍스트 재설정
+      const W = cv.width, H = 64, r = 18;
+      ctx.beginPath(); // 라운드 박스 (구형 브라우저 호환 위해 arcTo로)
+      ctx.moveTo(r, 0);
+      ctx.lineTo(W - r, 0); ctx.arcTo(W, 0, W, r, r);
+      ctx.lineTo(W, H - r); ctx.arcTo(W, H, W - r, H, r);
+      ctx.lineTo(W / 2 + 12, H); ctx.lineTo(W / 2, H + 18); ctx.lineTo(W / 2 - 12, H); // 꼬리
+      ctx.lineTo(r, H); ctx.arcTo(0, H, 0, H - r, r);
+      ctx.lineTo(0, r); ctx.arcTo(0, 0, r, 0, r);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fill();
+      ctx.font = font;
+      ctx.fillStyle = "#1a1a2e";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(opt.text, W / 2, H / 2 + 2);
+      w = cv.width / 60;
+      h = cv.height / 60;
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    spr.renderOrder = 999;
+    spr.scale.set(w * 0.01, h * 0.01, 1); // 팝인 시작 크기
+    this.scene.add(spr);
+    c.bubble = { spr, t: 0, dur: opt.emoji ? 2.4 : 3.0, w, h, rise: 0 };
+    this.positionBubble(c);
+  },
+
+  positionBubble(c) {
+    const b = c.bubble;
+    if (!b) return;
+    // 그룹 원점(발밑)에서 머리(약 5.9유닛) 위로 — 떠오르는 rise 포함
+    b.spr.position.set(c.group.position.x, c.group.position.y + 7.1 + b.rise, c.group.position.z);
+  },
+
+  updateBubbles(dt) {
+    this.chars.forEach(c => {
+      const b = c.bubble;
+      if (!b) return;
+      b.t += dt;
+      const pop = 1 - (1 - Math.min(1, b.t / 0.16)) ** 3; // 튀어나오는 팝인
+      b.spr.scale.set(b.w * pop, b.h * pop, 1);
+      b.rise += dt * 0.25;
+      b.spr.material.opacity = Math.max(0, Math.min(1, (b.dur - b.t) / 0.4));
+      this.positionBubble(c);
+      if (b.t >= b.dur) this.removeBubble(c);
+    });
+  },
+
+  removeBubble(c) {
+    if (!c || !c.bubble) return;
+    this.scene.remove(c.bubble.spr);
+    c.bubble.spr.material.map.dispose();
+    c.bubble.spr.material.dispose();
+    c.bubble = null;
+  },
+
+  // E3: 승리 세리머니 시작 — 걷기/프리롬을 멈추고 만세 상태로. 반환값 = 결과 창 지연(ms)
+  startCeremony(winnerIdx) {
+    const c = this.chars[winnerIdx];
+    if (!c || !c.group.visible) return 0; // 캐릭터가 없으면 바로 결과 창
+    c.walk = null;
+    c.roaming = null;
+    c.remoteRoaming = null;
+    c.parked = false;
+    c.waistAng = 0;
+    c.leanX = 0;
+    c.bridgeTarget = null;
+    c.eyeYaw = 0;
+    c.gripHandTarget = new THREE.Vector3(0.37, 0.95 * 3.66, 1.1); // 오른손은 세운 큐를 잡음
+    c.cheer = { t: 0, fromBlend: c.poseBlend, y0: -2.9 };
+    this.spawnConfetti(c.group.position);
+    return 2600;
+  },
+
+  updateCeremony(dt) {
+    this.chars.forEach(c => {
+      if (!c.cheer) return;
+      const ch = c.cheer;
+      ch.t += dt;
+      // 일어서기(0.4초) → 통통 점프 반복
+      c.poseBlend = Math.min(1, ch.fromBlend + (1 - ch.fromBlend) * (ch.t / 0.4));
+      const hop = ch.t > 0.4 ? Math.abs(Math.sin((ch.t - 0.4) * 6)) * 0.45 : 0;
+      c.group.position.y = ch.y0 + hop;
+      // 관객(기본 카메라) 쪽을 보도록 부드럽게 회전
+      let d = -Math.PI / 2 - c.group.rotation.y;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      c.group.rotation.y += d * Math.min(1, dt * 6);
+      this.refreshRig(c);
+      this.holdCueVertical(c);
+    });
+  },
+
+  // 승자 머리 위에서 쏟아지는 색종이 — 색깔별 THREE.Points (바닥에 쌓였다가 사라짐)
+  spawnConfetti(center) {
+    this.removeConfetti();
+    const palette = [0xffd54f, 0x81c784, 0x64b5f6, 0xe57373, 0xba68c8, 0xfff176];
+    this.confetti = { t: 0, dur: 3.4, groups: [] };
+    palette.forEach(col => {
+      const n = 16;
+      const pos = new Float32Array(n * 3);
+      const vel = [];
+      for (let i = 0; i < n; i++) {
+        pos[i * 3] = center.x + (Math.random() - 0.5) * 1.4;
+        pos[i * 3 + 1] = center.y + 6.8 + Math.random() * 1.6;
+        pos[i * 3 + 2] = center.z + (Math.random() - 0.5) * 1.4;
+        vel.push([(Math.random() - 0.5) * 2.4, 1.2 + Math.random() * 2.4, (Math.random() - 0.5) * 2.4]);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+        color: col, size: 0.17, transparent: true, depthTest: false
+      }));
+      pts.frustumCulled = false;
+      pts.renderOrder = 998;
+      this.scene.add(pts);
+      this.confetti.groups.push({ pts, vel });
+    });
+  },
+
+  updateConfetti(dt) {
+    const cf = this.confetti;
+    if (!cf) return;
+    cf.t += dt;
+    const fade = Math.max(0, Math.min(1, (cf.dur - cf.t) / 0.6));
+    cf.groups.forEach(g => {
+      const arr = g.pts.geometry.attributes.position.array;
+      for (let i = 0; i < g.vel.length; i++) {
+        const v = g.vel[i];
+        v[1] -= 6.5 * dt;          // 중력
+        v[0] *= 1 - 0.5 * dt;      // 공기 저항
+        v[2] *= 1 - 0.5 * dt;
+        arr[i * 3] += v[0] * dt;
+        arr[i * 3 + 1] += v[1] * dt;
+        arr[i * 3 + 2] += v[2] * dt;
+        if (arr[i * 3 + 1] < -2.85) { arr[i * 3 + 1] = -2.85; v[0] = v[1] = v[2] = 0; } // 바닥에 쌓임
+      }
+      g.pts.geometry.attributes.position.needsUpdate = true;
+      g.pts.material.opacity = fade;
+    });
+    if (cf.t >= cf.dur) this.removeConfetti();
+  },
+
+  removeConfetti() {
+    if (!this.confetti) return;
+    this.confetti.groups.forEach(g => {
+      this.scene.remove(g.pts);
+      g.pts.geometry.dispose();
+      g.pts.material.dispose();
+    });
+    this.confetti = null;
+  },
+
+  // 새 게임/메뉴 진입 시 세리머니·말풍선·색종이 흔적 정리
+  clearSocialFx() {
+    clearTimeout(this._winTimer);
+    this.chars.forEach(c => {
+      if (c.cheer) {
+        c.group.position.y = c.cheer.y0;
+        c.cheer = null;
+      }
+      this.removeBubble(c);
+    });
+    this.removeConfetti();
   },
 
   /* ---------- 물리 ---------- */
@@ -1858,6 +2136,10 @@ const Game = {
     this.updateIdleChars(dt); // 대기 캐릭터는 어느 상태에서든 살아 움직임
     this.updateFreeRoam(dt);   // F0: 상대 턴 자유 이동 (내 캐릭터)
     this.updateRemoteRoam(dt); // F1: 상대의 자유 이동 반영
+    this.updateCeremony(dt);   // E3: 승리 세리머니 (MENU 상태에서도 재생)
+    this.updateBubbles(dt);    // E1: 이모트 말풍선
+    this.updateConfetti(dt);
+    this.updateSocialUI();
 
     if (this.state === "MENU") return; // 시작/승리 화면에서는 정지
 
@@ -2057,6 +2339,12 @@ const Game = {
           };
         }
         break;
+      case "emote": // E1: 상대의 이모트/빠른 채팅 — 상대 캐릭터 머리 위 말풍선
+      case "chat":
+        if (this.mode === "online" && Number.isInteger(msg.id)) {
+          this.playSocial(1 - this.myIdx, msg.t, msg.id);
+        }
+        break;
       case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)
         if (this.mode === "online") {
           this.applyResumeState(msg.snap);
@@ -2211,6 +2499,7 @@ const Game = {
   // 상대가 유예 안에 돌아오지 않음 → 몰수승 (방은 서버에서 이미 제거됨)
   onForfeitWin() {
     if (this.mode !== "online") return;
+    const myIdx = this.myIdx; // mode를 바꾸기 전에 확보
     this.onNetResume();
     this.state = "MENU";
     this.mode = "solo"; // 온라인 상태 해제
@@ -2219,7 +2508,12 @@ const Game = {
     document.getElementById("win-title").textContent = "🏆 몰수승!";
     document.getElementById("win-desc").textContent = "상대가 돌아오지 않아 승리로 처리되었습니다";
     document.getElementById("btn-rematch").style.display = "none"; // 상대가 없어 재대결 불가
-    document.getElementById("overlay-win").classList.add("show");
+    // E3: 몰수승도 세리머니 후 결과 창
+    const delay = this.startCeremony(myIdx);
+    clearTimeout(this._winTimer);
+    this._winTimer = setTimeout(() => {
+      if (this.state === "MENU") document.getElementById("overlay-win").classList.add("show");
+    }, delay);
   },
 
   // 다시하기: 온라인이면 상대에게도 알리고 양쪽 모두 재시작
@@ -2417,6 +2711,7 @@ const Game = {
     this.layoutBalls(); // 시작 화면 뒤 배경으로 테이블을 미리 보여줌
     this.bindEvents();
     this.bindSpinWidget();
+    this.buildSocialUI(); // E1: 이모트·빠른 채팅 버튼 생성
     this.updateCueAim();
   }
 };
