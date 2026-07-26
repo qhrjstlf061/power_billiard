@@ -967,11 +967,20 @@ const Game = {
       && !!this.activeC && !this.activeC.walk && this.activeC.group.visible;
   },
 
-  // 경계(바닥·테이블)만 판정 — 캐릭터 겹침은 updateFreeRoam이 밀어내기(슬라이드)로 처리
-  roamAllowedPos(x, z) {
+  // 경계(바닥·테이블)만 판정 — 캐릭터 겹침은 updateFreeRoam이 밀어내기(슬라이드)로 처리.
+  // 주의: 조준 스탠스(requiredAimDistance, 6.05/3.45)는 로밍 사각형(6.3/3.7)보다 테이블에
+  // 더 붙어 설 수 있음 → 조준 직후엔 이미 "금지 구역 안"이므로, 안에서는 침투 깊이가
+  // 늘지 않는 이동(탈출·평행)을 허용해야 함. 아니면 그 자리에서 완전히 얼어붙는다.
+  roamAllowedPos(x, z, fromX, fromZ) {
     const R = this.ROAM;
     if (Math.abs(x) > R.floorX || Math.abs(z) > R.floorZ) return false; // 바닥 밖
-    if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) return false; // 테이블 안
+    if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) {
+      if (fromX !== undefined && Math.abs(fromX) < R.tableX && Math.abs(fromZ) < R.tableZ) {
+        const depth = (px, pz) => Math.min(R.tableX - Math.abs(px), R.tableZ - Math.abs(pz));
+        return depth(x, z) <= depth(fromX, fromZ) + 1e-9; // 더 깊이만 아니면 OK
+      }
+      return false; // 밖에서 안으로 진입은 차단
+    }
     return true;
   },
 
@@ -1061,9 +1070,9 @@ const Game = {
             tz = op.z + (dz / d) * 1.4;
           }
         }
-        // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행
-        if (this.roamAllowedPos(tx, p.z)) p.x = tx;
-        if (this.roamAllowedPos(p.x, tz)) p.z = tz;
+        // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행 (from 좌표는 금지 구역 탈출 판정용)
+        if (this.roamAllowedPos(tx, p.z, p.x, p.z)) p.x = tx;
+        if (this.roamAllowedPos(p.x, tz, p.x, p.z)) p.z = tz;
 
         // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
         const targetYaw = Math.atan2(-mz, mx);
