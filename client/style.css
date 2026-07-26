@@ -294,6 +294,32 @@
   .rank-nick { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rank-rec { color: #9a9ab0; font-variant-numeric: tabular-nums; }
 
+  /* C1: 자유 채팅 — 좌하단, 이모트 버튼 위 */
+  #chat-box {
+    left: 12px; bottom: 98px; z-index: 12;
+    display: none; width: 250px;
+    pointer-events: none;
+  }
+  #chat-log {
+    display: flex; flex-direction: column; gap: 3px;
+    margin-bottom: 6px; max-height: 156px; overflow: hidden;
+  }
+  .chat-row {
+    font-size: 0.78rem; line-height: 1.35;
+    background: rgba(8, 8, 22, 0.55);
+    border-radius: 8px; padding: 3px 9px;
+    word-break: break-all;
+  }
+  .chat-row b { color: #ffd54f; margin-right: 5px; }
+  .chat-row.mine b { color: #81c784; }
+  #chat-input {
+    width: 100%; pointer-events: auto;
+    padding: 6px 10px; font-size: 0.8rem;
+    border: 1px solid rgba(255,255,255,0.22); border-radius: 8px;
+    background: rgba(8, 8, 22, 0.55); color: #eee; outline: none;
+  }
+  #chat-input:focus { border-color: #ffd54f; background: rgba(8, 8, 22, 0.9); }
+
   /* E: 이모트·빠른 채팅 — 온라인 대결 중 좌측 하단 (핑 배지 위) */
   #social-box {
     left: 12px; bottom: 44px; z-index: 13;

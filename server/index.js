@@ -230,7 +230,9 @@ const VALIDATORS = {
     && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71)),
   // E1: 이모트·빠른 채팅 — 정해진 id만 (자유 텍스트 없음 → 욕설·도배 원천 차단)
   emote: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
-  chat: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16
+  chat: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
+  // C1: 자유 채팅 — 텍스트는 길이만 검증 (렌더링은 클라가 textContent로 안전 처리)
+  say: (m) => typeof m.x === "string" && m.x.trim().length >= 1 && m.x.length <= 100
 };
 
 // 역할·턴 검증 — 서버가 세션 상태(R0)를 아는 덕분에 가능
@@ -406,6 +408,9 @@ io.on("connection", (socket) => {
     if (obj.t === "aim" || obj.t === "move") { if (!allowRate(socket, obj.t, 15, 20)) return; }
     else if (obj.t === "emote" || obj.t === "chat") {
       if (!allowRate(socket, "social", 0.7, 3)) return logDrop(room, idx, obj, "rate");
+    }
+    else if (obj.t === "say") { // C1: 채팅은 초당 1개(버스트 4)
+      if (!allowRate(socket, "say", 1, 4)) return logDrop(room, idx, obj, "rate");
     }
     else if (!allowRate(socket, "msg", 10, 10)) return logDrop(room, idx, obj, "rate");
 

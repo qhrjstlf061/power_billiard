@@ -392,11 +392,39 @@ async function startServer() {
   eHost.emit("leave"); eGuest.emit("leave");
   log("25. 이모트·빠른 채팅 OK — 양방향 릴레이, id 검증, 도배 제한(" + emoteCount + "/10 통과)");
 
+  /* ========== C1: 자유 채팅 ========== */
+  const sHost = io(URL);
+  const sGuest = io(URL);
+  const shr = await ack(sHost, "host");
+  await ack(sGuest, "join", shr.code);
+  sHost.emit("msg", { t: "start", target: 30 });
+  await sleep(100);
+  const gotSay = once(sGuest, "msg");
+  sHost.emit("msg", { t: "say", x: "안녕하세요! 한 판 잘 부탁해요 🎱" });
+  const sm = await gotSay;
+  assert(sm.t === "say" && sm.x.includes("잘 부탁"), "say 릴레이 실패");
+  const gotSay2 = once(sHost, "msg");
+  sGuest.emit("msg", { t: "say", x: "저야말로!" }); // 턴과 무관하게 양방향
+  assert((await gotSay2).t === "say", "게스트 say 릴레이 실패");
+  await expectDrop(() => sGuest.emit("msg", { t: "say", x: "x".repeat(101) }), sHost, "너무 긴 say");
+  await expectDrop(() => sGuest.emit("msg", { t: "say", x: "   " }), sHost, "공백뿐인 say");
+  await expectDrop(() => sGuest.emit("msg", { t: "say", x: 123 }), sHost, "문자열 아닌 say");
+  // 도배 방지: 연발 시 버스트(4개) 수준만 통과
+  let sayCount = 0;
+  const sf = (m) => { if (m.t === "say") sayCount++; };
+  sGuest.on("msg", sf);
+  for (let i = 0; i < 12; i++) sHost.emit("msg", { t: "say", x: "spam" + i });
+  await sleep(400);
+  sGuest.off("msg", sf);
+  assert(sayCount >= 1 && sayCount <= 5, "say 도배가 제한돼야 함 (통과=" + sayCount + "/12)");
+  sHost.emit("leave"); sGuest.emit("leave");
+  log("26. 자유 채팅 OK — 양방향 릴레이, 길이·타입 검증, 도배 제한(" + sayCount + "/12 통과)");
+
   /* ========== B4: 서버 심판 가동 확인 ========== */
   hs = await health();
   assert(hs.judge && hs.judge.mode === "flag", "판정 모드는 기본 flag여야 함");
   assert(hs.judge.shots >= 1, "서버가 샷을 시뮬레이션했어야 함 (shots=" + (hs.judge && hs.judge.shots) + ")");
-  log("26. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
+  log("27. 서버 심판 OK — flag 모드에서 샷 " + hs.judge.shots + "건 재시뮬레이션 (불일치 좌표 "
     + hs.judge.coordMiss + "건·점수 " + hs.judge.scoreMiss + "건 기록)");
 
   console.log("ALL PASS");

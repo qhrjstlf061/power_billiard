@@ -1389,6 +1389,8 @@ const Game = {
     this.standAnim = null;
     this.currentShot = null;
     this.clearSocialFx(); // E: 이전 판의 세리머니·말풍선·색종이 정리
+    const chatLog = document.getElementById("chat-log"); // C1: 채팅 로그도 새 판마다 비움
+    if (chatLog) chatLog.innerHTML = "";
     this.layoutBalls();
     this.state = "AIM";
     this.aimAngle = 0;
@@ -2114,6 +2116,11 @@ const Game = {
     const box = document.getElementById("social-box");
     if (box) box.style.display = show ? "block" : "none";
     if (!show) document.getElementById("social-panel").classList.remove("open");
+    const chat = document.getElementById("chat-box"); // C1: 채팅도 같은 조건으로 표시
+    if (chat) {
+      chat.style.display = show ? "block" : "none";
+      if (!show) document.getElementById("chat-input").blur();
+    }
   },
 
   sendSocial(kind, id) {
@@ -2142,6 +2149,41 @@ const Game = {
       this.spawnBubble(idx, { text: txt });
       Sound.tones([620], { step: 0, dur: 0.12, vol: 0.1 });
     }
+  },
+
+  /* ---------- C1: 자유 채팅 ---------- */
+  sendChat() {
+    const input = document.getElementById("chat-input");
+    const txt = (input.value || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    input.value = "";
+    input.blur();
+    if (!txt || this.mode !== "online" || !Net.active) return;
+    const now = performance.now();
+    if (this._chatAt && now - this._chatAt < 800) { // 서버 레이트 리밋(1/s)에 맞춘 쿨다운
+      this.showToast("⏳ 조금 천천히 보내주세요");
+      return;
+    }
+    this._chatAt = now;
+    Net.send({ t: "say", x: txt });
+    this.playChat(this.myIdx, Net.getNick() || "나", txt, true);
+  },
+
+  // 채팅 로그 한 줄 + 캐릭터 머리 위 말풍선 (내 것/상대 것 공용)
+  playChat(idx, nick, txt, mine) {
+    const log = document.getElementById("chat-log");
+    if (log) {
+      const row = document.createElement("div");
+      row.className = "chat-row" + (mine ? " mine" : "");
+      const b = document.createElement("b");
+      b.textContent = nick; // textContent라 이스케이프 불필요
+      row.appendChild(b);
+      row.appendChild(document.createTextNode(txt));
+      log.appendChild(row);
+      while (log.children.length > 8) log.firstChild.remove();
+      setTimeout(() => row.remove(), 25000); // 오래된 줄은 자연히 사라짐
+    }
+    this.spawnBubble(idx, { text: txt.length > 28 ? txt.slice(0, 27) + "…" : txt });
+    Sound.tones([mine ? 620 : 540], { step: 0, dur: 0.1, vol: 0.08 });
   },
 
   // 캐릭터 머리 위 3D 말풍선 — 캔버스에 그려 스프라이트로 띄움 (캐릭터를 따라다님)
@@ -2713,6 +2755,11 @@ const Game = {
           this.playSocial(1 - this.myIdx, msg.t, msg.id);
         }
         break;
+      case "say": // C1: 상대의 자유 채팅
+        if (this.mode === "online" && typeof msg.x === "string") {
+          this.playChat(1 - this.myIdx, Net.peerNick || "상대", msg.x.slice(0, 100), false);
+        }
+        break;
       case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)
         if (this.mode === "online") {
           this.applyResumeState(msg.snap);
@@ -2978,6 +3025,22 @@ const Game = {
     });
     const aimBtn = document.getElementById("aim-toggle");
     if (aimBtn) aimBtn.addEventListener("click", () => { Sound.ensure(); this.toggleAimMode(); });
+
+    // C1: 채팅 — Enter로 입력창 열기, 입력 중엔 게임 키(WASD·Space·ESC)와 분리
+    const chatInput = document.getElementById("chat-input");
+    chatInput.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") this.sendChat();
+      else if (e.key === "Escape") { chatInput.value = ""; chatInput.blur(); }
+    });
+    chatInput.addEventListener("keyup", (e) => e.stopPropagation());
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && this.mode === "online" && Net.active
+        && this.state !== "MENU" && document.activeElement !== chatInput) {
+        e.preventDefault();
+        chatInput.focus();
+      }
+    });
 
     // F0: 프리롬 이동 키 (WASD/방향키) — 닉네임·코드 입력칸은 stopPropagation으로 제외됨
     this.keys = {};
