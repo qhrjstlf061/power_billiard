@@ -967,20 +967,11 @@ const Game = {
       && !!this.activeC && !this.activeC.walk && this.activeC.group.visible;
   },
 
-  roamAllowedPos(x, z, fromX, fromZ, selfC) {
+  // 경계(바닥·테이블)만 판정 — 캐릭터 겹침은 updateFreeRoam이 밀어내기(슬라이드)로 처리
+  roamAllowedPos(x, z) {
     const R = this.ROAM;
     if (Math.abs(x) > R.floorX || Math.abs(z) > R.floorZ) return false; // 바닥 밖
     if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) return false; // 테이블 안
-    // F2: 상대 캐릭터와 겹침 방지 — 단, 이미 겹쳐 있으면 멀어지는 이동은 허용 (끼임 방지)
-    const other = this.chars.find(o => o && o !== selfC);
-    if (other && other.group.visible) {
-      const op = other.group.position;
-      const d = Math.hypot(x - op.x, z - op.z);
-      if (d < 1.4) {
-        const dPrev = fromX !== undefined ? Math.hypot(fromX - op.x, fromZ - op.z) : Infinity;
-        if (d <= dPrev) return false;
-      }
-    }
     return true;
   },
 
@@ -1055,11 +1046,24 @@ const Game = {
         // 조이스틱은 기울기에 비례한 아날로그 속도 (키보드는 항상 최대)
         const step = this.ROAM.speed * Math.min(1, inMag) * dt;
         const p = c.group.position;
+        // M6: 다른 캐릭터와 겹치면 이동을 막는 대신 원 둘레로 밀어내 미끄러지듯 지나감
+        // (예전엔 "멀어지는 이동만 허용"이라 캐릭터에 스치면 움직임이 뚝 멈췄음)
+        let tx = p.x + mx * step;
+        let tz = p.z + mz * step;
+        const other = this.chars.find(o => o && o !== c && o.group.visible);
+        if (other) {
+          const op = other.group.position;
+          let dx = tx - op.x, dz = tz - op.z;
+          let d = Math.hypot(dx, dz);
+          if (d < 1.4) {
+            if (d < 1e-4) { dx = p.x - op.x; dz = p.z - op.z; d = Math.hypot(dx, dz) || 1; }
+            tx = op.x + (dx / d) * 1.4;
+            tz = op.z + (dz / d) * 1.4;
+          }
+        }
         // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행
-        const nx = p.x + mx * step;
-        if (this.roamAllowedPos(nx, p.z, p.x, p.z, c)) p.x = nx;
-        const nz = p.z + mz * step;
-        if (this.roamAllowedPos(p.x, nz, p.x, p.z, c)) p.z = nz;
+        if (this.roamAllowedPos(tx, p.z)) p.x = tx;
+        if (this.roamAllowedPos(p.x, tz)) p.z = tz;
 
         // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
         const targetYaw = Math.atan2(-mz, mx);
