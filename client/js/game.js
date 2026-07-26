@@ -1473,22 +1473,31 @@ const Game = {
     if (Math.hypot(dx, dz) < 0.02) return;
     const desired = Math.atan2(dz, dx);
 
-    // H11-2: 캐릭터가 설 수 없는 방향은 조준이 경계에서 막힘 —
-    // 현재 각도에서 목표 각도로 조금씩 회전하다가 막히는 지점에서 정지
+    // H11-2/M1: 설 수 없는 방향은 조준이 경계에서 막힘.
+    // 코스 스캔(0.02)으로 막히는 띠를 찾되, 경계각 자체는 이분 탐색으로 정밀하게 —
+    // 예전엔 0.02rad 스텝에 양자화돼 경계에서 조준이 뚝뚝 끊겼음
     this.ensureAimAllowed();
     let diff = desired - this.aimAngle;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // 최단 각도차
-    const step = 0.02, dir = Math.sign(diff);
-    const steps = Math.floor(Math.abs(diff) / step);
-    let cur = this.aimAngle;
-    let blockedMid = false;
-    for (let i = 0; i < steps; i++) {
-      const next = cur + dir * step;
-      if (!this.isAimAllowed(next)) { blockedMid = true; break; }
-      cur = next;
+    const span = Math.abs(diff);
+    if (span < 1e-5) return;
+    const dir = Math.sign(diff);
+    let lastOk = 0, firstBad = null;
+    for (let a = 0.02; a < span; a += 0.02) { // 막힌 띠를 건너뛰지 않도록 순차 확인
+      if (this.isAimAllowed(this.aimAngle + dir * a)) lastOk = a;
+      else { firstBad = a; break; }
     }
-    if (!blockedMid && this.isAimAllowed(desired)) cur = desired;
-    this.aimAngle = cur;
+    if (firstBad === null) {
+      if (this.isAimAllowed(desired)) { this.aimAngle = desired; return; } // 콘 안 — 그대로 부드럽게
+      firstBad = span; // 목표 각도만 차단 — 경계는 lastOk~span 사이
+    }
+    let lo = lastOk, hi = firstBad; // lo = 허용, hi = 차단
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2;
+      if (this.isAimAllowed(this.aimAngle + dir * mid)) lo = mid;
+      else hi = mid;
+    }
+    this.aimAngle += dir * lo; // 경계각에 연속적으로 밀착
   },
 
   updateCueAim(offset) {
