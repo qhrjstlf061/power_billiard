@@ -330,6 +330,17 @@
   }
   .chat-btn:hover { background: rgba(255,255,255,0.22); }
 
+  /* M5: 모바일 조준 모드 토글 — 조이스틱 위 (터치 기기 + 내 턴에만 표시) */
+  #aim-toggle {
+    position: fixed; right: 26px; bottom: 156px; z-index: 12;
+    width: 56px; height: 56px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(8, 8, 22, 0.55);
+    font-size: 1.5rem; line-height: 1;
+    display: none; cursor: pointer;
+  }
+  #aim-toggle.on { background: rgba(255,213,79,0.85); border-color: #ffd54f; }
+
   /* F2: 모바일 프리롬 조이스틱 — 터치 기기 + 상대 턴에만 표시 */
   #joystick {
     position: fixed; right: 26px; bottom: 30px; z-index: 12;

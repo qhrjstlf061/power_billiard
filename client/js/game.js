@@ -1014,8 +1014,8 @@ const Game = {
       if (this._moveHintT > 4) {
         this._moveHintShown = true;
         this.showToast(this.isTouch
-          ? "🕹️ 내 턴에도 조이스틱으로 자리를 옮길 수 있어요 — 선 자리가 곧 샷 각도!"
-          : "🚶 내 턴에도 WASD로 자리를 옮길 수 있어요 — 선 자리가 곧 샷 각도!");
+          ? "🕹️ 조이스틱 = 이동 · 🎯 버튼 = 조준 모드 — 선 자리가 곧 샷 각도!"
+          : "🚶 WASD = 이동 · 🎯 Space = 조준 모드 — 선 자리가 곧 샷 각도!");
       }
     }
 
@@ -1072,6 +1072,7 @@ const Game = {
 
     if (moving) {
       if (!c.roaming) { // 걷기 시작 — 조준 자세 해제, 큐는 세워 든다 (M0)
+        if (aimSide) this.aimMode = false; // M5: 걸으면 조준 모드 해제
         c.poseBlend = 1;
         c.waistAng = 0;
         c.leanX = 0;
@@ -1175,6 +1176,7 @@ const Game = {
     this._remoteRoam = null; // F1: 턴이 바뀌면 이전 프리롬 목표는 무효
     this._peerAnchor = null; // M3: 상대 스탠스도 초기화
     this.aimBlocked = false;
+    this.aimMode = false;    // M5: 새 턴은 탐색 모드부터
     if (this.activeIdx === i) return;
     const oldIdx = this.activeIdx;
     const oldC = this.chars[oldIdx];
@@ -1377,6 +1379,7 @@ const Game = {
     this.aimAngle = 0;
     this._peerAnchor = null;
     this.resetStanceAnchor(); // M1: 시작 스탠스 = 수구 뒤 기본 자리
+    this.aimMode = false;     // M5: 탐색 모드부터 시작
     this.cueStick.visible = true;
     this.updateGauge(0);
     this.setSpin(0, 0); // 새 게임은 무회전 당점부터
@@ -1466,6 +1469,7 @@ const Game = {
     // M0/M1: 걷는 중엔 마우스가 시선 담당, 사정거리 밖이면 조준 자체가 없음
     if (this.activeC && this.activeC.roaming) return;
     if (this.aimBlocked) return;
+    if (!this.aimMode) return; // M5: 조준 모드에서만 마우스가 각도를 움직임
     const p = this.pointerToTable(this.pointer.x, this.pointer.y);
     if (!p) return;
     const cue = this.balls[this.cueIndex];
@@ -1712,6 +1716,46 @@ const Game = {
     });
   },
 
+  /* ---------- M5: 스페이스바 조준 모드 ---------- */
+  // 평소엔 탐색 모드(서서 이동·관찰, 조준 고정) — Space/🎯버튼/수구 클릭으로 조준 모드 진입.
+  // 조준 모드에서만 마우스가 각도를 움직이고 클릭 충전이 가능하다.
+  aimMode: false,
+
+  toggleAimMode() {
+    if (this.state !== "AIM" || !this.isMyTurn() || this.netPaused) return;
+    const c = this.activeC;
+    if (!c || c.walk || c.roaming) return;
+    if (!this.aimMode && this.aimBlocked) {
+      this.showToast("🚶 수구가 너무 멀어요 — 가까이 이동한 뒤 조준하세요");
+      return;
+    }
+    this.aimMode = !this.aimMode;
+    if (this.aimMode) {
+      this.showToast(this.isTouch
+        ? "🎯 조준 모드 — 화면을 눌러 조준, 꾹 눌러 발사 (🎯 버튼으로 해제)"
+        : "🎯 조준 모드 — 마우스로 조준, 좌클릭 꾹 눌러 발사 (Space로 해제)");
+    } else {
+      this.showToast(this.isTouch
+        ? "🚶 이동 모드 — 조이스틱 이동, 🎯 버튼으로 다시 조준"
+        : "🚶 이동 모드 — WASD 이동, Space로 다시 조준");
+    }
+  },
+
+  // 모바일용 🎯 버튼 표시/상태 (터치 기기 + 내 턴 조준 단계에만)
+  updateAimToggleBtn() {
+    const el = document.getElementById("aim-toggle");
+    if (!el) return;
+    const show = this.isTouch && this.state === "AIM" && this.isMyTurn() && !this.netPaused;
+    if (show !== this._aimBtnShown) {
+      this._aimBtnShown = show;
+      el.style.display = show ? "block" : "none";
+    }
+    if (show && this.aimMode !== this._aimBtnOn) {
+      this._aimBtnOn = this.aimMode;
+      el.classList.toggle("on", this.aimMode);
+    }
+  },
+
   // 서서 큐를 세워 든 대기 자세 (M1-3 "이동 필요" 상태 + 원격 미러링 공용)
   standIdle(c, x, z) {
     if (x !== undefined) c.group.position.set(x, -2.9, z);
@@ -1807,6 +1851,18 @@ const Game = {
       }
       return;
     }
+    if (!this.aimMode) {
+      // M5: 탐색 모드 — 수구를 클릭하면 조준 모드로, 그 외엔 진입 방법 안내
+      const p = this.pointerToTable(this.pointer.x, this.pointer.y);
+      const cue = this.balls[this.cueIndex];
+      if (p && cue && Math.hypot(p.x - cue.x, p.z - cue.y) < 1.2) this.toggleAimMode();
+      else {
+        this.showToast(this.isTouch
+          ? "🎯 버튼(또는 수구 탭)으로 조준 모드에 들어가세요"
+          : "🎯 Space(또는 수구 클릭)로 조준 모드에 들어가세요");
+      }
+      return;
+    }
     this.state = "CHARGE";
     this.charging = { t: 0, force: this.forceMin };
   },
@@ -1840,6 +1896,7 @@ const Game = {
 
   // N0: 발사 공통 진입점 — 로컬 입력과 네트워크 수신 샷이 같은 경로를 탄다
   fireShot(p) {
+    this.aimMode = false; // M5: 샷 후엔 탐색 모드부터
     this.aimAngle = p.angle;
     this.setSpin(p.spinX, p.spinY);
     const speed = p.force * this.contactTime;
@@ -2329,6 +2386,8 @@ const Game = {
     this.updateConfetti(dt);
     this.updateSocialUI();
 
+    this.updateAimToggleBtn(); // M5: 모바일 🎯 버튼 표시 갱신
+
     // M2: 수구 사정거리 링 — 내 턴 조준 단계에만 (색 = 현재 자리에서 칠 수 있는지)
     if (this.reachRing) {
       const show = this.state === "AIM" && this.isMyTurn() && !this.netPaused;
@@ -2364,6 +2423,22 @@ const Game = {
       const remoteWalking = this.mode === "online" && !this.isMyTurn()
         && this._remoteRoam && this._remoteRoam.m;
       if (walking || this.aimBlocked || remoteWalking) {
+        this.setGuideVisible(false);
+        return;
+      }
+      // M5: 탐색 모드(조준 모드 아님) — 서서 마우스 지점을 바라보며 대기
+      if (this.isMyTurn() && !this.aimMode) {
+        if (c) {
+          if (!this.isTouch) { // 눈은 마우스가 가리키는 곳을 따라감
+            const look = this.pointerToTable(this.pointer.x, this.pointer.y);
+            if (look) {
+              c.group.updateMatrixWorld();
+              const local = c.group.worldToLocal(new THREE.Vector3(look.x, BALL_R, look.z));
+              c.eyeYaw = Math.max(-0.7, Math.min(0.7, Math.atan2(-local.z, local.x)));
+            }
+          }
+          this.standIdle(c);
+        }
         this.setGuideVisible(false);
         return;
       }
@@ -2499,8 +2574,11 @@ const Game = {
       if (this.state !== "MENU") {
         this.state = "AIM";
         this.cueStick.visible = true;
-        this.updateAimFromPointer();
-        this.updateCueAim();
+        // M5: 내 쪽은 탐색 모드로 시작(다음 프레임에 서서 대기) — 상대 화면만 조준 재현
+        if (!this.isMyTurn()) {
+          this.updateAimFromPointer();
+          this.updateCueAim();
+        }
       }
     }
   },
@@ -2824,6 +2902,16 @@ const Game = {
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this.cancelCharge(); // ESC = 샷 취소
     });
+    // M5: Space = 조준 모드 토글 (입력칸은 stopPropagation으로 제외됨)
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" && !e.repeat) {
+        e.preventDefault();
+        Sound.ensure();
+        this.toggleAimMode();
+      }
+    });
+    const aimBtn = document.getElementById("aim-toggle");
+    if (aimBtn) aimBtn.addEventListener("click", () => { Sound.ensure(); this.toggleAimMode(); });
 
     // F0: 프리롬 이동 키 (WASD/방향키) — 닉네임·코드 입력칸은 stopPropagation으로 제외됨
     this.keys = {};
