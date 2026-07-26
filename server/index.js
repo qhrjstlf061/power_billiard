@@ -205,7 +205,7 @@ function snapshot(room) {
 }
 
 /* ---------- R2: 프로토콜 방어 ---------- */
-const PROTOCOL_VERSION = 2;   // R1(resume) 반영 — 클라 net.js와 일치해야 함
+const PROTOCOL_VERSION = 3;   // M3(무빙 샷: move 양쪽 허용) 반영 — 클라 net.js와 일치해야 함
 const MAX_ROOMS = 200;        // 방 생성 폭주 방지
 
 // 메시지 스키마 검증 — 클라 게임 상수 기준 (force 100~800, spin ±0.75, 공 4개)
@@ -244,8 +244,8 @@ function allowedRole(room, idx, m) {
       return st.currentPlayer === idx && m.turn === st.turnNo + 1;
     case "aim":
       return st.currentPlayer === idx;
-    case "move": // 프리롬은 반대로 — 기다리는 쪽만 돌아다닐 수 있음
-      return st.currentPlayer !== idx;
+    case "move": // M3(무빙 샷): 양쪽 모두 이동 가능 — 대기 측 프리롬 + 차례인 쪽 자리 잡기
+      return true;
     default:
       return true; // hello / rematch / bye는 양쪽 다 가능
   }

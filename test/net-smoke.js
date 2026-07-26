@@ -12,7 +12,7 @@ const PORT = 3100;
 const GRACE_SEC = 2;
 const WAIT_TTL_SEC = 2;  // 테스트용 단축 (실서비스 600)
 const IDLE_TTL_SEC = 8;  // 테스트용 단축 (실서비스 1800) — 본 테스트 흐름을 방해하지 않을 만큼 길게
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const URL = `http://localhost:${PORT}`;
 
 const log = (s) => console.log(s);
@@ -353,12 +353,15 @@ async function startServer() {
   rGuest.emit("msg", { t: "move", x: 8.5, z: -5.2, yaw: 1.1, m: true });
   const mv = (await gotMove);
   assert(mv.t === "move" && mv.x === 8.5, "대기 측 move가 릴레이돼야 함");
-  // 차례인 쪽(호스트)의 move는 차단
-  await expectDrop(() => rHost.emit("msg", { t: "move", x: 1, z: -6, yaw: 0, m: true }), rGuest, "차례인 쪽의 move");
+  // M3(무빙 샷): 차례인 쪽(호스트)의 move도 릴레이됨 — 조준 자리 잡기
+  const gotMove2 = once(rGuest, "msg");
+  rHost.emit("msg", { t: "move", x: -7.1, z: 2.4, yaw: 0.5, m: false });
+  const mv2 = (await gotMove2);
+  assert(mv2.t === "move" && mv2.m === false, "차례인 쪽 move도 릴레이돼야 함 (무빙 샷)");
   // 범위 밖 좌표 차단
   await expectDrop(() => rGuest.emit("msg", { t: "move", x: 50, z: 0, yaw: 0, m: true }), rHost, "범위 밖 move");
   rHost.emit("leave"); rGuest.emit("leave");
-  log("24. 프리롬 move OK — 대기 측만 릴레이, 턴 위반·범위 밖 차단");
+  log("24. 무빙 샷 move OK — 양쪽 모두 릴레이, 범위 밖 차단");
 
   /* ========== E1: 이모트·빠른 채팅 ========== */
   const eHost = io(URL);

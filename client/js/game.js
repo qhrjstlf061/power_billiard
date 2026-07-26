@@ -961,12 +961,18 @@ const Game = {
       && !this.isMyTurn() && !!this.chars[this.myIdx] && !this.chars[this.myIdx].walk;
   },
 
-  roamAllowedPos(x, z, fromX, fromZ) {
+  // M0: 내 턴 걷기 — 조준(AIM) 중, 턴 교대 걷기가 끝난 뒤라면 자리를 옮길 수 있다
+  canAimWalk() {
+    return this.state === "AIM" && !this.netPaused && this.isMyTurn()
+      && !!this.activeC && !this.activeC.walk && this.activeC.group.visible;
+  },
+
+  roamAllowedPos(x, z, fromX, fromZ, selfC) {
     const R = this.ROAM;
     if (Math.abs(x) > R.floorX || Math.abs(z) > R.floorZ) return false; // 바닥 밖
     if (Math.abs(x) < R.tableX && Math.abs(z) < R.tableZ) return false; // 테이블 안
     // F2: 상대 캐릭터와 겹침 방지 — 단, 이미 겹쳐 있으면 멀어지는 이동은 허용 (끼임 방지)
-    const other = this.chars[1 - this.myIdx];
+    const other = this.chars.find(o => o && o !== selfC);
     if (other && other.group.visible) {
       const op = other.group.position;
       const d = Math.hypot(x - op.x, z - op.z);
@@ -986,19 +992,30 @@ const Game = {
   },
 
   updateFreeRoam(dt) {
-    if (this.mode !== "online") return;
-    const c = this.chars[this.myIdx];
-    if (!c) return;
+    // 대상: 대기 측 프리롬(온라인, 상대 턴 — 내 캐릭터) 또는 M0 조준 측 걷기(내 턴 — 활성 캐릭터)
+    const waitSide = this.canFreeRoam();
+    const aimSide = !waitSide && this.canAimWalk();
+    const c = waitSide ? this.chars[this.myIdx] : (aimSide ? this.activeC : null);
+    const can = !!c;
 
-    const can = this.canFreeRoam();
     // 첫 대기 턴 3초 뒤 조작법 힌트 (시작 토스트를 덮지 않게 지연)
-    if (can && !this._roamHintShown) {
+    if (waitSide && !this._roamHintShown) {
       this._roamHintT = (this._roamHintT || 0) + dt;
       if (this._roamHintT > 3) {
         this._roamHintShown = true;
         this.showToast(this.isTouch
           ? "🕹️ 상대 턴 — 조이스틱으로 당구장을 돌아다닐 수 있어요!"
           : "⌨️ 상대 턴 — WASD로 당구장을 돌아다닐 수 있어요!");
+      }
+    }
+    // M0: 첫 내 턴 힌트 — 자리를 옮기면 칠 수 있는 각도가 달라진다
+    if (aimSide && !this._moveHintShown) {
+      this._moveHintT = (this._moveHintT || 0) + dt;
+      if (this._moveHintT > 4) {
+        this._moveHintShown = true;
+        this.showToast(this.isTouch
+          ? "🕹️ 내 턴에도 조이스틱으로 자리를 옮길 수 있어요 — 선 자리가 곧 샷 각도!"
+          : "🚶 내 턴에도 WASD로 자리를 옮길 수 있어요 — 선 자리가 곧 샷 각도!");
       }
     }
 
@@ -1012,6 +1029,7 @@ const Game = {
         if (!show) this.resetJoy();
       }
     }
+    if (!c) return;
 
     const k = this.keys || {};
     const joy = this.joy || { f: 0, r: 0 };
@@ -1039,9 +1057,9 @@ const Game = {
         const p = c.group.position;
         // 축 분리 이동 — 경계에 걸리면 미끄러지듯 진행
         const nx = p.x + mx * step;
-        if (this.roamAllowedPos(nx, p.z, p.x, p.z)) p.x = nx;
+        if (this.roamAllowedPos(nx, p.z, p.x, p.z, c)) p.x = nx;
         const nz = p.z + mz * step;
-        if (this.roamAllowedPos(p.x, nz, p.x, p.z)) p.z = nz;
+        if (this.roamAllowedPos(p.x, nz, p.x, p.z, c)) p.z = nz;
 
         // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
         const targetYaw = Math.atan2(-mz, mx);
@@ -1053,6 +1071,14 @@ const Game = {
     }
 
     if (moving) {
+      if (!c.roaming) { // 걷기 시작 — 조준 자세 해제, 큐는 세워 든다 (M0)
+        c.poseBlend = 1;
+        c.waistAng = 0;
+        c.leanX = 0;
+        c.bridgeTarget = null;
+        c.aimExtra = 0;
+        c.gripHandTarget = new THREE.Vector3(0.37, 0.95 * 3.66, 1.1);
+      }
       c.roaming = true;
       c.parked = false;
       // F2-2: 시선 — 마우스가 가리키는 지점을 바라봄 (대기 시선과 같은 ±0.7rad 제한)
@@ -1071,6 +1097,8 @@ const Game = {
       this.holdCueVertical(c);
     } else if (c.roaming) {
       c.roaming = false;
+      // M1: 조준 측 걷기가 멈춤 — 이 자리가 새 스탠스 앵커 (여기서 커버되는 각도만 조준 가능)
+      if (aimSide) this.stanceAnchor = { x: c.group.position.x, z: c.group.position.z };
       if (!c.walk) { // 턴 교대 걷기가 시작됐다면 그쪽에 양보
         c.walkCycle = 0;
         this.refreshRig(c);
@@ -1107,7 +1135,9 @@ const Game = {
     const idx = 1 - this.myIdx;
     const c = this.chars[idx];
     const tgt = this._remoteRoam;
-    if (!c || !tgt || c.walk || this.activeIdx === idx) return; // 턴 교대·활성 캐릭터가 우선
+    if (!c || !tgt || c.walk) return; // 턴 교대 걷기가 우선
+    // M3: 차례인(활성) 상대는 걷는 중일 때만 여기서 — 조준 자세는 updateCueAim(원격 스탠스)가 관리
+    if (this.activeIdx === idx && !tgt.m) return;
 
     const p = c.group.position;
     const dx = tgt.x - p.x, dz = tgt.z - p.z;
@@ -1143,6 +1173,8 @@ const Game = {
   setActiveChar(i) {
     if (this.mode === "solo") i = 0;
     this._remoteRoam = null; // F1: 턴이 바뀌면 이전 프리롬 목표는 무효
+    this._peerAnchor = null; // M3: 상대 스탠스도 초기화
+    this.aimBlocked = false;
     if (this.activeIdx === i) return;
     const oldIdx = this.activeIdx;
     const oldC = this.chars[oldIdx];
@@ -1157,9 +1189,9 @@ const Game = {
       () => this.parkCharacter(oldC, oldIdx)
     );
 
-    // 새 사람은 수구 뒤 조준 지점으로 걸어온 뒤 엎드려 조준
-    // (H11/H12: 허용 각도로 스냅 후, 미세 스트레치 반영된 거리로 목적지 계산)
-    this.ensureAimAllowed();
+    // 새 사람은 수구 뒤 기본 조준 지점으로 걸어온 뒤 엎드려 조준
+    // (M1: 이 목적지가 새 스탠스 앵커 — 걸어가는 동안에도 이 자리 기준으로 조준 허용 판정)
+    this.ensureAimStandable();
     const cue = this.balls[this.cueIndex];
     const D = Math.min(this.requiredAimDistance(this.aimAngle), (1.15 + 0.2) * 3.66);
     const dest = new THREE.Vector3(
@@ -1167,6 +1199,7 @@ const Game = {
       -2.9,
       cue.y - Math.sin(this.aimAngle) * D
     );
+    this.stanceAnchor = { x: dest.x, z: dest.z };
     this.startWalk(newC, dest, -this.aimAngle, null);
   },
 
@@ -1221,6 +1254,20 @@ const Game = {
     );
     this.targetLine.frustumCulled = false;
     this.scene.add(this.targetLine);
+
+    // M2: 수구 사정거리 링 — 내 턴에 수구 둘레 표시 (초록 = 칠 수 있음 / 회색 = 이동 필요)
+    const reachPts = [];
+    for (let i = 0; i <= 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      reachPts.push(new THREE.Vector3(Math.cos(a) * 0.4, 0.02, Math.sin(a) * 0.4));
+    }
+    this.reachRing = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(reachPts),
+      new THREE.LineBasicMaterial({ color: 0x81c784, transparent: true, opacity: 0.85 })
+    );
+    this.reachRing.frustumCulled = false;
+    this.reachRing.visible = false;
+    this.scene.add(this.reachRing);
   },
 
   setGuideVisible(v) {
@@ -1328,6 +1375,8 @@ const Game = {
     this.layoutBalls();
     this.state = "AIM";
     this.aimAngle = 0;
+    this._peerAnchor = null;
+    this.resetStanceAnchor(); // M1: 시작 스탠스 = 수구 뒤 기본 자리
     this.cueStick.visible = true;
     this.updateGauge(0);
     this.setSpin(0, 0); // 새 게임은 무회전 당점부터
@@ -1414,6 +1463,9 @@ const Game = {
   updateAimFromPointer() {
     // N2: 온라인에서 상대 턴이면 내 마우스는 조준에 반영하지 않음 (원격 aim 메시지가 대신)
     if (!this.isMyTurn()) return;
+    // M0/M1: 걷는 중엔 마우스가 시선 담당, 사정거리 밖이면 조준 자체가 없음
+    if (this.activeC && this.activeC.roaming) return;
+    if (this.aimBlocked) return;
     const p = this.pointerToTable(this.pointer.x, this.pointer.y);
     if (!p) return;
     const cue = this.balls[this.cueIndex];
@@ -1440,8 +1492,8 @@ const Game = {
   },
 
   updateCueAim(offset) {
-    // H9: 캐릭터가 조준 지점으로 걸어오는 중에는 걷기 컨트롤러가 몸·큐를 관리
-    if (this.activeC && this.activeC.walk) return;
+    // H9/M0: 캐릭터가 걷는 중(턴 교대·자유 이동)에는 걷기 로직이 몸·큐를 관리
+    if (this.activeC && (this.activeC.walk || this.activeC.roaming)) return;
     const cue = this.balls[this.cueIndex];
     const off = offset !== undefined ? offset : cue.radius + 0.05;
     // 당점 반영: 선택한 타점을 겨누도록 큐대를 좌우/상하로 살짝 이동
@@ -1457,21 +1509,37 @@ const Game = {
     this.cuePitch = this.computeCuePitch();
     this.cueStick.rotation.set(0, -this.aimAngle, -this.cuePitch);
 
-    // 캐릭터: 수구 뒤 바닥에 서서 조준 방향을 따라 회전.
-    // H12: 발이 테이블에 걸리면 최대 0.2m까지만 뒤로 물러서고 그만큼 상체를 살짝 기울임.
-    // 그 이상 필요한 각도는 updateAimFromPointer에서 이미 차단됨
+    // 캐릭터: 조준 방향의 스탠스 지점에 서서 회전 (M1: 위치 우선 — 앵커 기준 잔발 조정)
     if (this.character) {
-      const D0 = 1.15 * 3.66;
-      const D = Math.min(this.requiredAimDistance(this.aimAngle), D0 + 0.2 * 3.66);
       const c = this.activeC;
-      c.aimDistU = D;
-      c.aimExtra = D - D0;
-      c.leanX = c.aimExtra * 0.7; // 미세 스트레치 (상체 기울임 최대 ~0.14m)
-      this.character.position.set(
-        cue.x - Math.cos(this.aimAngle) * D,
-        -2.9, // 바닥(H2-1) 위
-        cue.y - Math.sin(this.aimAngle) * D
-      );
+      const D0 = 1.15 * 3.66;
+      let s = null;
+      if (this.mode === "online" && !this.isMyTurn()) {
+        // M3: 상대(활성) 캐릭터 — 수신한 걷기 종료 위치(_peerAnchor)로 같은 공식을 재현
+        const rr = this._remoteRoam;
+        if (rr && rr.m) return; // 걷는 중엔 updateRemoteRoam이 몸·큐를 관리
+        c.remoteRoaming = false; // 걷기 애니메이션 잔상 제거
+        const anchor = this._peerAnchor;
+        s = anchor ? this.stanceFor(this.aimAngle, anchor) : null;
+        if (anchor && (!s || s.dist > this.MOVESHOT.STEP_R + 0.3)) {
+          // 상대가 사정거리 밖에 서 있음("이동 필요" 상태 미러링) — 서서 대기
+          this.standIdle(c, anchor.x, anchor.z);
+          return;
+        }
+        if (!s) { // 아직 걸은 적 없음 — 턴 시작 기본 자리 (양쪽이 같은 계산)
+          const D = Math.min(this.requiredAimDistance(this.aimAngle), D0 + 0.2 * 3.66);
+          s = { d: D, x: cue.x - Math.cos(this.aimAngle) * D, z: cue.y - Math.sin(this.aimAngle) * D };
+        }
+      } else {
+        // M1-2: 내 조준 — 앵커에서 STEP_R 안의 잔발 조정으로 커버되는 스탠스
+        if (!this.stanceAnchor) this.resetStanceAnchor();
+        s = this.stanceFor(this.aimAngle, this.stanceAnchor);
+        if (!s) return; // 이 각도는 설 수 없음 (updateAimFromPointer가 이미 차단)
+      }
+      c.aimDistU = s.d;
+      c.aimExtra = s.d - D0;
+      c.leanX = Math.min(c.aimExtra * 0.7, 1.4); // 딥 리닝 — 상체 기울임 최대 ~0.38m
+      this.character.position.set(s.x, -2.9, s.z);
       this.character.rotation.y = -this.aimAngle;
       this.updateGripArm(off - (cue.radius + 0.05));
     }
@@ -1535,18 +1603,117 @@ const Game = {
     return Math.max(D0, tExit + 0.12);
   },
 
-  // H11/H12: 기본 거리 + 미세 스트레치(최대 0.2m)로 커버 가능한 각도만 허용
-  isAimAllowed(angle) {
+  /* ---------- M1: 무빙 샷 — 위치(스탠스 앵커) 기반 조준 ---------- */
+  // 파라미터 (미터 × 3.66 = 유닛). STEP_R = 걷지 않고 발만 옮기는 반경(사실상 조준 부채꼴 폭),
+  // REACH_MAX = 딥 리닝 포함 수구까지 최대 스탠스 거리
+  MOVESHOT: {
+    STEP_R: 0.6 * 3.66,
+    REACH_MAX: 1.9 * 3.66,
+    D0: 1.15 * 3.66
+  },
+  stanceAnchor: null, // 마지막으로 "자리 잡은" 발 위치 — 걷기가 끝날 때만 갱신 (잔발로 기어가기 방지)
+
+  // 각도 θ의 스탠스 레이(수구 뒤, 거리 dReq~REACH_MAX) 위에서 기준점 P에 가장 가까운 지점
+  stanceFor(angle, P) {
+    const cue = this.balls[this.cueIndex];
+    if (!cue || !P) return null;
+    const M = this.MOVESHOT;
+    const dReq = this.requiredAimDistance(angle); // 발이 테이블 밖일 최소 거리
+    if (dReq > M.REACH_MAX + 1e-6) return null;   // 이 각도는 어느 거리에서도 못 섬
+    const dirX = -Math.cos(angle), dirZ = -Math.sin(angle);
+    const proj = (P.x - cue.x) * dirX + (P.z - cue.y) * dirZ; // P를 레이에 투영
+    const d = Math.max(dReq, Math.min(M.REACH_MAX, proj));
+    const x = cue.x + dirX * d, z = cue.y + dirZ * d;
+    return { d, x, z, dist: Math.hypot(x - P.x, z - P.z) };
+  },
+
+  // H11 원형(위치 무관): 기본 스탠스 거리(1.15+0.2m)로 설 수 있는 각도인지 —
+  // 턴 시작·자동 걸어가기의 "기본 자리" 계산 전용 (조준 허용 판정은 isAimAllowed)
+  isAimStandable(angle) {
     return this.requiredAimDistance(angle) <= (1.15 + 0.2) * 3.66 + 1e-6;
   },
 
-  // H11-3: 현재 각도가 막힌 상태면(샷 후 수구 이동 등) 가장 가까운 허용 각도로 스냅
-  ensureAimAllowed() {
-    if (this.isAimAllowed(this.aimAngle)) return;
+  ensureAimStandable() {
+    if (this.isAimStandable(this.aimAngle)) return;
     for (let a = 0.02; a <= Math.PI; a += 0.02) {
-      if (this.isAimAllowed(this.aimAngle + a)) { this.aimAngle += a; return; }
-      if (this.isAimAllowed(this.aimAngle - a)) { this.aimAngle -= a; return; }
+      if (this.isAimStandable(this.aimAngle + a)) { this.aimAngle += a; return; }
+      if (this.isAimStandable(this.aimAngle - a)) { this.aimAngle -= a; return; }
     }
+  },
+
+  // M1-1: 이 각도로 조준 가능? = 스탠스 지점이 내 앵커에서 STEP_R 안 (잔발 조정 범위)
+  isAimAllowed(angle) {
+    if (this.mode === "online" && !this.isMyTurn()) return true; // 원격 조준은 그대로 수용
+    const P = this.stanceAnchor;
+    if (!P) return this.isAimStandable(angle); // 앵커 없음(구형 흐름 안전망)
+    const s = this.stanceFor(angle, P);
+    return !!s && s.dist <= this.MOVESHOT.STEP_R + 1e-6;
+  },
+
+  // M1-5: 현재 각도가 이 자리에서 불가능하면 가까운 허용 각도로 스냅.
+  // 아무 각도도 안 되면(수구가 사정거리 밖) false — "이동 필요" 상태
+  ensureAimAllowed() {
+    if (this.isAimAllowed(this.aimAngle)) return true;
+    for (let a = 0.02; a <= Math.PI; a += 0.02) {
+      if (this.isAimAllowed(this.aimAngle + a)) { this.aimAngle += a; return true; }
+      if (this.isAimAllowed(this.aimAngle - a)) { this.aimAngle -= a; return true; }
+    }
+    return false;
+  },
+
+  // 스탠스 앵커를 현재 각도의 기본 자리(수구 뒤)로 리셋 — 게임 시작·복귀·자동 접근용
+  resetStanceAnchor() {
+    const cue = this.balls[this.cueIndex];
+    if (!cue) return;
+    this.ensureAimStandable();
+    const D = Math.min(this.requiredAimDistance(this.aimAngle), (1.15 + 0.2) * 3.66);
+    this.stanceAnchor = {
+      x: cue.x - Math.cos(this.aimAngle) * D,
+      z: cue.y - Math.sin(this.aimAngle) * D
+    };
+    this.aimBlocked = false;
+  },
+
+  // M4: 수구 근처 클릭 시 기본 스탠스 지점까지 자동으로 걸어가기 (편의)
+  walkToCueBall() {
+    const c = this.activeC;
+    const cue = this.balls[this.cueIndex];
+    if (!c || c.walk || !cue) return;
+    const P = c.group.position;
+    this.aimAngle = Math.atan2(cue.y - P.z, cue.x - P.x); // 내 쪽에서 공을 향하는 각도로
+    this.ensureAimStandable();
+    const D = Math.min(this.requiredAimDistance(this.aimAngle), (1.15 + 0.2) * 3.66);
+    const dest = new THREE.Vector3(
+      cue.x - Math.cos(this.aimAngle) * D,
+      -2.9,
+      cue.y - Math.sin(this.aimAngle) * D
+    );
+    this.stanceAnchor = { x: dest.x, z: dest.z };
+    this.startWalk(c, dest, -this.aimAngle, () => {
+      // M3: 자동 걸어가기는 로컬 걷기라 스트림이 없음 — 도착 지점만 상대에게 통지
+      if (this.mode === "online" && Net.active) {
+        Net.send({
+          t: "move",
+          x: Math.round(dest.x * 1000) / 1000,
+          z: Math.round(dest.z * 1000) / 1000,
+          yaw: Math.round(-this.aimAngle * 1000) / 1000,
+          m: false
+        });
+      }
+    });
+  },
+
+  // 서서 큐를 세워 든 대기 자세 (M1-3 "이동 필요" 상태 + 원격 미러링 공용)
+  standIdle(c, x, z) {
+    if (x !== undefined) c.group.position.set(x, -2.9, z);
+    c.poseBlend = 1;
+    c.waistAng = 0;
+    c.leanX = 0;
+    c.bridgeTarget = null;
+    c.aimExtra = 0;
+    c.gripHandTarget = new THREE.Vector3(0.37, 0.95 * 3.66, 1.1);
+    this.refreshRig(c);
+    this.holdCueVertical(c);
   },
 
   // 조준선: 진행 경로에서 처음 만나는 공(고스트볼) 또는 쿠션까지
@@ -1618,7 +1785,19 @@ const Game = {
     if (this.state !== "AIM") return;
     if (this.netPaused) return;                    // R1: 재접속 대기 중에는 발사 불가
     if (!this.isMyTurn()) return;                  // N2: 상대 턴에는 발사 불가
-    if (this.activeC && this.activeC.walk) return; // 걸어오는 동안은 발사 대기
+    if (this.activeC && (this.activeC.walk || this.activeC.roaming)) return; // 걷는 동안은 발사 대기
+    if (this.aimBlocked) {
+      // M1-3/M4: 사정거리 밖 — 수구 근처를 클릭했으면 자동으로 걸어가고, 아니면 안내
+      const p = this.pointerToTable(this.pointer.x, this.pointer.y);
+      const cue = this.balls[this.cueIndex];
+      if (p && cue && Math.hypot(p.x - cue.x, p.z - cue.y) < 1.2) this.walkToCueBall();
+      else {
+        this.showToast(this.isTouch
+          ? "🚶 수구가 너무 멀어요 — 수구를 탭하면 자동으로 걸어갑니다"
+          : "🚶 수구가 너무 멀어요 — 수구를 클릭하면 자동으로 걸어갑니다");
+      }
+      return;
+    }
     this.state = "CHARGE";
     this.charging = { t: 0, force: this.forceMin };
   },
@@ -2141,9 +2320,44 @@ const Game = {
     this.updateConfetti(dt);
     this.updateSocialUI();
 
+    // M2: 수구 사정거리 링 — 내 턴 조준 단계에만 (색 = 현재 자리에서 칠 수 있는지)
+    if (this.reachRing) {
+      const show = this.state === "AIM" && this.isMyTurn() && !this.netPaused;
+      this.reachRing.visible = show;
+      if (show) {
+        const cueB = this.balls[this.cueIndex];
+        if (cueB) {
+          this.reachRing.position.set(cueB.x, 0.02, cueB.y);
+          this.reachRing.material.color.setHex(this.aimBlocked ? 0x9a9ab0 : 0x81c784);
+        }
+      }
+    }
+
     if (this.state === "MENU") return; // 시작/승리 화면에서는 정지
 
     if (this.state === "AIM") {
+      const c = this.activeC;
+      const walking = c && (c.walk || c.roaming);
+      // M1-3: 사정거리 판정 — 이 자리(앵커)에서 아무 각도도 못 잡으면 "이동 필요"
+      if (this.isMyTurn() && !walking) {
+        const blocked = !this.ensureAimAllowed();
+        if (blocked !== this.aimBlocked) {
+          this.aimBlocked = blocked;
+          if (blocked) {
+            this.showToast(this.isTouch
+              ? "🚶 수구가 너무 멀어요 — 조이스틱으로 이동하거나 수구를 탭!"
+              : "🚶 수구가 너무 멀어요 — WASD로 이동하거나 수구를 클릭!");
+          }
+        }
+        if (this.aimBlocked && c) this.standIdle(c); // 큐를 세워 들고 제자리 대기
+      }
+      // M3: 상대(활성 플레이어)가 걷는 중 — 조준 요소만 숨기고 몸은 updateRemoteRoam이 관리
+      const remoteWalking = this.mode === "online" && !this.isMyTurn()
+        && this._remoteRoam && this._remoteRoam.m;
+      if (walking || this.aimBlocked || remoteWalking) {
+        this.setGuideVisible(false);
+        return;
+      }
       this.updateAimFromPointer();
       this.updateCueAim();
       this.updateGuide();
@@ -2331,12 +2545,16 @@ const Game = {
           }
         }
         break;
-      case "move": // F1: 상대의 자유 이동 좌표 (내 턴 동안 상대가 돌아다님)
+      case "move": // F1/M3: 상대의 이동 좌표 (대기 프리롬 + 차례인 상대의 자리 잡기)
         if (this.mode === "online" && Number.isFinite(msg.x) && Number.isFinite(msg.z) && Number.isFinite(msg.yaw)) {
           this._remoteRoam = {
             x: msg.x, z: msg.z, yaw: msg.yaw, m: !!msg.m,
             e: Number.isFinite(msg.e) ? Math.max(-0.7, Math.min(0.7, msg.e)) : 0
           };
+          // M3: 차례인 상대의 걷기 종료 지점 = 상대 스탠스 앵커 (조준 자세 재현 기준)
+          if (!msg.m && this.currentPlayer === 1 - this.myIdx) {
+            this._peerAnchor = { x: msg.x, z: msg.z };
+          }
         }
         break;
       case "emote": // E1: 상대의 이모트/빠른 채팅 — 상대 캐릭터 머리 위 말풍선
@@ -2485,6 +2703,8 @@ const Game = {
       this.refreshScores();
       this.highlightTurn();
       this.setActiveChar(this.currentPlayer);
+      this._peerAnchor = null;
+      this.resetStanceAnchor(); // M1: 복귀 후 스탠스는 기본 자리부터
       this.cueStick.visible = true;
       this.updateAimFromPointer();
       this.updateCueAim();

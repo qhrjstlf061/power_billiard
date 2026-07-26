@@ -7,7 +7,7 @@
    기존 Net API(isHost/active/send/cleanup/setStatus/host/join) 유지.
    ========================================================= */
 const Net = {
-  PROTOCOL_VERSION: 2, // R2: 서버(server/index.js)와 일치해야 함 — 프로토콜 바뀔 때 양쪽 다 올릴 것
+  PROTOCOL_VERSION: 3, // R2: 서버(server/index.js)와 일치해야 함 — 프로토콜 바뀔 때 양쪽 다 올릴 것
   socket: null,
   isHost: false,
   active: false, // 상대와 연결되어 게임 중
