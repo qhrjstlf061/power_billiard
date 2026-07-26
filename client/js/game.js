@@ -1399,12 +1399,34 @@ const Game = {
     this.updateGauge(0);
     this.setSpin(0, 0); // 새 게임은 무회전 당점부터
 
+    // M8: 새 게임 — 이전 판의 캐릭터 상태(걷기·프리롬·자세·시선)를 완전 초기화
+    this._remoteRoam = null;
+    this.chars.forEach(ch => {
+      if (!ch) return;
+      ch.walk = null;
+      ch.roaming = false;
+      ch.remoteRoaming = false;
+      ch.parked = false;
+      ch.walkCycle = 0;
+      ch.eyeYaw = 0;
+      ch.waistAng = 0;
+      ch.leanX = 0;
+      ch.bridgeTarget = null;
+      ch.aimExtra = 0;
+    });
+
     // H8: 캐릭터 배치 — 대결이면 두 명 다 등장, P2는 대기 위치에서 관전
     this.activeIdx = 0;
     const c2 = this.chars[1];
     if (c2) {
       c2.group.visible = c2.cue.visible = (mode !== "solo");
       if (mode !== "solo") this.parkCharacter(c2, 1);
+    }
+    // M8: 활성 캐릭터는 수구 뒤 기본 스탠스에 서서 시작 (이전 판 위치 잔상 제거)
+    const c1 = this.chars[0];
+    if (c1 && this.stanceAnchor) {
+      c1.group.rotation.y = -this.aimAngle;
+      this.standIdle(c1, this.stanceAnchor.x, this.stanceAnchor.z);
     }
 
     this.setupScoreboard();
