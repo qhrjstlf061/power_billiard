@@ -958,12 +958,14 @@ const Game = {
 
   canFreeRoam() {
     return this.mode === "online" && this.state !== "MENU" && !this.netPaused
+      && !this.menuOverlayOpen()
       && !this.isMyTurn() && !!this.chars[this.myIdx] && !this.chars[this.myIdx].walk;
   },
 
   // M0: 내 턴 걷기 — 조준(AIM) 중, 턴 교대 걷기가 끝난 뒤라면 자리를 옮길 수 있다
   canAimWalk() {
     return this.state === "AIM" && !this.netPaused && this.isMyTurn()
+      && !this.menuOverlayOpen()
       && !!this.activeC && !this.activeC.walk && this.activeC.group.visible;
   },
 
@@ -1416,7 +1418,30 @@ const Game = {
     }
   },
 
+  /* ---------- M7: 게임 중 ☰ = 일시 정지 화면 (재개 / 메뉴로 가기) ---------- */
+  menuOverlayOpen() {
+    const el = document.getElementById("overlay-menu");
+    return !!el && el.classList.contains("show");
+  },
+
+  openPauseMenu() {
+    if (this.state === "MENU") return; // 이미 시작 화면
+    this.charging = null;              // 충전 중이었다면 취소
+    this.updateGauge(0);
+    if (this.state === "CHARGE") this.state = "AIM";
+    document.getElementById("menu-note").textContent =
+      this.mode === "online"
+        ? "⚠️ 온라인 대결은 일시 정지되지 않으며, 메뉴로 나가면 기권 처리됩니다"
+        : "게임으로 돌아가거나 메뉴로 나갈 수 있습니다";
+    document.getElementById("overlay-menu").classList.add("show");
+  },
+
+  closePauseMenu() {
+    document.getElementById("overlay-menu").classList.remove("show");
+  },
+
   openMenu() {
+    this.closePauseMenu();
     // N4: 온라인 게임 중 메뉴로 나가면 상대에게 알리고 연결 종료
     if (this.mode === "online" && Net.active) {
       Net.send({ t: "bye" });
@@ -1735,7 +1760,7 @@ const Game = {
   aimMode: false,
 
   toggleAimMode() {
-    if (this.state !== "AIM" || !this.isMyTurn() || this.netPaused) return;
+    if (this.state !== "AIM" || !this.isMyTurn() || this.netPaused || this.menuOverlayOpen()) return;
     const c = this.activeC;
     if (!c || c.walk || c.roaming) return;
     if (!this.aimMode && this.aimBlocked) {
@@ -2416,6 +2441,9 @@ const Game = {
 
     if (this.state === "MENU") return; // 시작/승리 화면에서는 정지
 
+    // M7: 일시 정지 — 솔로·로컬 대결은 게임을 실제로 멈춤 (온라인은 공정성 때문에 계속 진행)
+    if (this.menuOverlayOpen() && this.mode !== "online") return;
+
     if (this.state === "AIM") {
       const c = this.activeC;
       const walking = c && (c.walk || c.roaming);
@@ -2913,7 +2941,10 @@ const Game = {
       if (e.button === 0) this.releaseCharge();
     });
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this.cancelCharge(); // ESC = 샷 취소
+      if (e.key !== "Escape") return;
+      if (this.menuOverlayOpen()) this.closePauseMenu();      // ESC = 일시 정지 닫기
+      else if (this.charging) this.cancelCharge();            // ESC = 샷 취소
+      else if (this.state !== "MENU") this.openPauseMenu();   // ESC = 일시 정지 열기
     });
     // M5: Space = 조준 모드 토글 (입력칸은 stopPropagation으로 제외됨)
     window.addEventListener("keydown", (e) => {
@@ -2978,7 +3009,10 @@ const Game = {
       viewBtn.textContent = this.viewMode === "default" ? "탑뷰" : "기본 시점";
     });
     document.getElementById("btn-reset").addEventListener("click", () => this.requestRematch());
-    document.getElementById("btn-menu").addEventListener("click", () => this.openMenu());
+    // M7: 게임 중 ☰ = 일시 정지 화면 (재개 / 메뉴로 가기)
+    document.getElementById("btn-menu").addEventListener("click", () => this.openPauseMenu());
+    document.getElementById("btn-menu-resume").addEventListener("click", () => this.closePauseMenu());
+    document.getElementById("btn-menu-exit").addEventListener("click", () => this.openMenu());
 
     document.getElementById("btn-mode-solo").addEventListener("click", () => this.startGame("solo"));
     document.getElementById("btn-mode-versus").addEventListener("click", () => this.startGame("versus"));
