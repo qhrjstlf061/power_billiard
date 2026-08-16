@@ -70,6 +70,28 @@
   #score-delta.gain { color: #81c784; }
   #score-delta.foul { color: #e57373; }
 
+  /* S0: 샷 클록 — 스코어보드 아래 */
+  #shot-clock {
+    position: fixed; z-index: 11;
+    top: 76px; left: 50%; transform: translateX(-50%);
+    width: 150px; height: 18px; border-radius: 9px;
+    background: rgba(8, 8, 22, 0.6);
+    border: 1px solid rgba(255,255,255,0.16);
+    overflow: hidden; display: none; pointer-events: none;
+  }
+  #clock-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
+    background: rgba(129,199,132,0.4);
+  }
+  #clock-fill.warn { background: rgba(255,213,79,0.45); }
+  #clock-fill.danger { background: rgba(229,115,115,0.55); }
+  #clock-num {
+    position: absolute; inset: 0; text-align: center;
+    font-size: 0.72rem; line-height: 18px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
+
   /* 당점(스핀) 선택 위젯 — 우측 상단, 미니멀 */
   #spin-widget {
     top: 58px; right: 14px;

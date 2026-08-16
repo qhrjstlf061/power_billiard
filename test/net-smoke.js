@@ -12,7 +12,7 @@ const PORT = 3100;
 const GRACE_SEC = 2;
 const WAIT_TTL_SEC = 2;  // 테스트용 단축 (실서비스 600)
 const IDLE_TTL_SEC = 8;  // 테스트용 단축 (실서비스 1800) — 본 테스트 흐름을 방해하지 않을 만큼 길게
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const URL = `http://localhost:${PORT}`;
 
 const log = (s) => console.log(s);
@@ -361,8 +361,17 @@ async function startServer() {
   // 범위 밖 좌표·잘못된 k 차단
   await expectDrop(() => rGuest.emit("msg", { t: "move", x: 50, z: 0, yaw: 0, m: true }), rHost, "범위 밖 move");
   await expectDrop(() => rHost.emit("msg", { t: "move", x: 0, z: -6, yaw: 0, m: false, k: 5 }), rGuest, "잘못된 k");
+  // S2: 샷 클록 pass — 역할·순번 검증은 shot과 동일 (남의 턴을 강제로 넘길 수 없음)
+  await expectDrop(() => rGuest.emit("msg", { t: "pass", turn: 1 }), rHost, "남의 턴 pass");
+  await expectDrop(() => rHost.emit("msg", { t: "pass", turn: 5 }), rGuest, "순번 건너뛴 pass");
+  const gotPass = once(rGuest, "msg");
+  rHost.emit("msg", { t: "pass", turn: 1 });
+  assert((await gotPass).t === "pass", "정당한 pass가 릴레이돼야 함");
+  await sleep(150);
+  hs = await health();
+  assert(hs.rooms[0].turnNo === 1 && hs.rooms[0].currentPlayer === 1, "pass가 서버 상태(턴 번호·차례 반전)에 기록돼야 함");
   rHost.emit("leave"); rGuest.emit("leave");
-  log("24. 무빙 샷 move OK — 양쪽 릴레이 + k(자세) 필드, 범위 밖·잘못된 k 차단");
+  log("24. 무빙 샷 move + 샷 클록 pass OK — k 필드, pass 역할·순번 검증, 서버 상태 기록");
 
   /* ========== E1: 이모트·빠른 채팅 ========== */
   const eHost = io(URL);

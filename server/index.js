@@ -98,6 +98,10 @@ function recordState(room, msg, idx) {
     case "shot":
       if (Number.isFinite(msg.turn)) st.turnNo = msg.turn;
       break;
+    case "pass": // S2: 시간 초과 — 턴 번호 소비 + 차례 반전 (재접속 스냅샷·다음 샷 검증 정합)
+      if (Number.isFinite(msg.turn)) st.turnNo = msg.turn;
+      st.currentPlayer = 1 - st.currentPlayer;
+      break;
     case "sync": // 호스트의 샷 종료 좌표 스냅샷
       if (Array.isArray(msg.b)) st.lastSync = msg.b;
       break;
@@ -205,7 +209,7 @@ function snapshot(room) {
 }
 
 /* ---------- R2: 프로토콜 방어 ---------- */
-const PROTOCOL_VERSION = 3;   // M3(무빙 샷: move 양쪽 허용) 반영 — 클라 net.js와 일치해야 함
+const PROTOCOL_VERSION = 4;   // S2(샷 클록 pass) 반영 — 클라 net.js와 일치해야 함
 const MAX_ROOMS = 200;        // 방 생성 폭주 방지
 
 // 메시지 스키마 검증 — 클라 게임 상수 기준 (force 100~800, spin ±0.75, 공 4개)
@@ -233,7 +237,9 @@ const VALIDATORS = {
   emote: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
   chat: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
   // C1: 자유 채팅 — 텍스트는 길이만 검증 (렌더링은 클라가 textContent로 안전 처리)
-  say: (m) => typeof m.x === "string" && m.x.trim().length >= 1 && m.x.length <= 100
+  say: (m) => typeof m.x === "string" && m.x.trim().length >= 1 && m.x.length <= 100,
+  // S2: 샷 클록 만료 — 득점 없이 턴만 넘김 (turnNo는 샷처럼 1 증가)
+  pass: (m) => num(m.turn, 1, 1e9)
 };
 
 // 역할·턴 검증 — 서버가 세션 상태(R0)를 아는 덕분에 가능
@@ -243,6 +249,7 @@ function allowedRole(room, idx, m) {
     case "start": case "sync": case "state":
       return idx === 0; // 호스트(심판) 전용
     case "shot":
+    case "pass": // S2: 시간 초과 신고도 샷과 같은 규칙 — 남의 턴을 강제로 넘길 수 없음
       // 자기 차례 + 다음 턴 번호만 허용 (중복/재전송 샷도 차단)
       return st.currentPlayer === idx && m.turn === st.turnNo + 1;
     case "aim":

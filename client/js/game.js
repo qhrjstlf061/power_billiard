@@ -1403,6 +1403,7 @@ const Game = {
     this._remoteAimTarget = null;
     this.resetStanceAnchor(); // M1: 시작 스탠스 = 수구 뒤 기본 자리
     this.aimMode = false;     // M5: 탐색 모드부터 시작
+    this.resetShotClock();    // S0: 첫 샷 클록
     this.cueStick.visible = true;
     this.updateGauge(0);
     this.setSpin(0, 0); // 새 게임은 무회전 당점부터
@@ -1799,6 +1800,86 @@ const Game = {
     this.startWalk(c, dest, -this.aimAngle, () => this.sendStanceState());
   },
 
+  /* ---------- S: 샷 클록 — 샷당 40초, 만료 시 턴 넘김 ---------- */
+  CLOCK_SEC: 40,
+  shotClock: null, // { left, warned, lastTick } — null이면 비활성 (솔로)
+
+  resetShotClock() {
+    this.shotClock = this.mode === "solo" ? null : { left: this.CLOCK_SEC, warned: false, lastTick: null };
+    this.updateClockUI();
+  },
+
+  updateShotClock(dt) {
+    const active = (this.state === "AIM" || this.state === "CHARGE")
+      && this.shotClock && this.mode !== "solo";
+    this.updateClockUI(active);
+    if (!active || this.netPaused) return;
+    if (this.menuOverlayOpen() && this.mode !== "online") return; // M7: 로컬 일시 정지 중엔 클록도 정지
+    const sc = this.shotClock;
+    if (sc.left <= 0) return; // 만료 처리 완료 — 상대 pass 대기 중일 수 있음
+    sc.left -= dt;
+
+    // S1: 10초 경고음 + 마지막 5초 초당 틱
+    if (sc.left <= 10 && !sc.warned) {
+      sc.warned = true;
+      Sound.tones([988, 988], { step: 0.15, dur: 0.12, vol: 0.15 });
+    }
+    if (sc.left <= 5 && sc.left > 0) {
+      const s = Math.ceil(sc.left);
+      if (s !== sc.lastTick) { sc.lastTick = s; Sound.tones([660], { step: 0, dur: 0.07, vol: 0.12 }); }
+    }
+
+    if (sc.left <= 0) {
+      sc.left = 0;
+      // 내 턴이면 자기 신고로 턴을 넘김 — 상대 턴이면 상대의 pass 메시지를 기다림 (S2)
+      if (this.isMyTurn()) this.doTimeoutPass();
+    }
+  },
+
+  updateClockUI(show) {
+    const box = document.getElementById("shot-clock");
+    if (!box) return;
+    if (show === undefined) {
+      show = (this.state === "AIM" || this.state === "CHARGE") && this.shotClock && this.mode !== "solo";
+    }
+    const vis = show ? "block" : "none";
+    if (box.style.display !== vis) box.style.display = vis;
+    if (!show) return;
+    const left = Math.max(0, this.shotClock.left);
+    document.getElementById("clock-num").textContent = Math.ceil(left) + "초";
+    const fill = document.getElementById("clock-fill");
+    fill.style.width = (left / this.CLOCK_SEC * 100) + "%";
+    fill.className = left <= 5 ? "danger" : left <= 10 ? "warn" : "";
+  },
+
+  // 시간 초과 — 득점 없이 턴만 넘김 (turnNo는 샷처럼 1 증가 → 서버 순번 검증 유지)
+  doTimeoutPass() {
+    this.charging = null;
+    this.updateGauge(0);
+    this.aimMode = false;
+    this.state = "AIM";
+    Sound.foul();
+    this.fxFlash("foul");
+    this.turnNo = (this.turnNo || 0) + 1;
+    if (this.mode === "online" && Net.active) Net.send({ t: "pass", turn: this.turnNo });
+    this.applyPass();
+  },
+
+  // 턴 전환 공통 (내 만료·상대 pass 수신 양쪽) — evaluateShot의 턴 교대와 같은 절차
+  applyPass() {
+    this.chars.forEach(c => { if (c) c.roaming = false; }); // 걷던 중이었어도 정리
+    this.currentPlayer = 1 - this.currentPlayer;
+    const next = this.players[this.currentPlayer];
+    this.cueIndex = next.ballIndex;
+    this.highlightTurn();
+    this.setActiveChar(this.currentPlayer);
+    this.resetShotClock();
+    const myNext = this.mode !== "online" || this.currentPlayer === this.myIdx;
+    this.showToast(this.mode === "online" && myNext
+      ? "⏰ 상대 시간 초과 — 내 차례!"
+      : `⏰ 시간 초과! → ${next.icon} ${next.name} 차례`);
+  },
+
   /* ---------- M5: 스페이스바 조준 모드 ---------- */
   // 평소엔 탐색 모드(서서 이동·관찰, 조준 고정) — Space/🎯버튼/수구 클릭으로 조준 모드 진입.
   // 조준 모드에서만 마우스가 각도를 움직이고 클릭 충전이 가능하다.
@@ -2076,6 +2157,7 @@ const Game = {
       msg += ` → ${next.icon} ${next.name} 차례`;
     }
 
+    this.resetShotClock(); // S0: 다음 샷 클록 (턴이 이어져도 샷마다 리셋)
     this.showToast(msg);
   },
 
@@ -2530,6 +2612,7 @@ const Game = {
     this.updateSocialUI();
 
     this.updateAimToggleBtn(); // M5: 모바일 🎯 버튼 표시 갱신
+    this.updateShotClock(dt);  // S0: 샷 클록 (AIM/CHARGE에서만 감소, MENU/ROLLING은 숨김)
 
     // M2: 수구 사정거리 링 — 내 턴 조준 단계에만 (색 = 현재 자리에서 칠 수 있는지)
     if (this.reachRing) {
@@ -2813,6 +2896,15 @@ const Game = {
           this.playChat(1 - this.myIdx, Net.peerNick || "상대", msg.x.slice(0, 100), false);
         }
         break;
+      case "pass": // S2: 상대 샷 클록 만료 — 턴이 나에게 넘어옴
+        if (this.mode === "online" && !this.isMyTurn() && this.state !== "ROLLING") {
+          if (Number.isFinite(msg.turn)) this.turnNo = msg.turn;
+          this.charging = null;
+          this.updateGauge(0);
+          this.state = "AIM";
+          this.applyPass();
+        }
+        break;
       case "correct": // B4: 서버 권위 판정 보정 (서버만 발신 가능 — 위조는 검증기가 차단)
         if (this.mode === "online") {
           this.applyResumeState(msg.snap);
@@ -2957,6 +3049,7 @@ const Game = {
       this.setActiveChar(this.currentPlayer);
       this._peerAnchor = null;
       this.resetStanceAnchor(); // M1: 복귀 후 스탠스는 기본 자리부터
+      this.resetShotClock();    // S0: 복귀 후 클록은 처음부터
       this.cueStick.visible = true;
       this.updateAimFromPointer();
       this.updateCueAim();
