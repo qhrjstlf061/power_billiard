@@ -227,7 +227,8 @@ const VALIDATORS = {
   bye: () => true,
   // F1: 프리롬 이동 (연출 전용 — 세션 상태에 기록하지 않음). e = 시선 yaw (선택)
   move: (m) => num(m.x, -12, 12) && num(m.z, -12, 12) && num(m.yaw, -10, 10)
-    && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71)),
+    && typeof m.m === "boolean" && (m.e === undefined || num(m.e, -0.71, 0.71))
+    && (m.k === undefined || m.k === 0 || m.k === 1), // V1: 자세 상태 (0=서있음, 1=조준)
   // E1: 이모트·빠른 채팅 — 정해진 id만 (자유 텍스트 없음 → 욕설·도배 원천 차단)
   emote: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,
   chat: (m) => Number.isInteger(m.id) && m.id >= 0 && m.id < 16,

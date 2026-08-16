@@ -716,7 +716,8 @@ const Game = {
     if (!c || !c.gripArm) return;
     c.parked = false;
     c.eyeYaw = 0;    // 조준 중에는 큐 라인을 내려다봄
-    c.poseBlend = 0; // 조준/스트로크는 항상 엎드린 자세
+    // V3: 엎드림은 스냅 대신 짧은 블렌딩(~0.2초) — 서있다 조준 진입이 자연스럽게
+    c.poseBlend = Math.max(0, c.poseBlend - (this._dt || 0.016) * 5);
     c.waistAng = delta * 0.1;
     c.gripHandTarget = c.gripArm.hand0.clone();
     // H11-4: 캐릭터가 테이블 밖으로 밀려난 만큼 큐 손잡이 지점도 앞으로 이동
@@ -1088,7 +1089,6 @@ const Game = {
     if (moving) {
       if (!c.roaming) { // 걷기 시작 — 조준 자세 해제, 큐는 세워 든다 (M0)
         if (aimSide) this.aimMode = false; // M5: 걸으면 조준 모드 해제
-        c.poseBlend = 1;
         c.waistAng = 0;
         c.leanX = 0;
         c.bridgeTarget = null;
@@ -1108,6 +1108,7 @@ const Game = {
       } else {
         c.eyeYaw = 0; // 터치 기기는 마우스가 없으니 진행 방향 정면
       }
+      c.poseBlend = Math.min(1, c.poseBlend + dt * 5); // V3: 걸으며 일어서는 블렌딩
       c.walkCycle += dt * 6.5; // 걷기 모션 재사용
       this.refreshRig(c);
       this.holdCueVertical(c);
@@ -1141,7 +1142,8 @@ const Game = {
       z: Math.round(p.z * 1000) / 1000,
       yaw: Math.round(c.group.rotation.y * 1000) / 1000,
       e: Math.round((c.eyeYaw || 0) * 100) / 100, // 시선도 상대 화면에 동기화
-      m: moving
+      m: moving,
+      k: this.aimMode ? 1 : 0 // V1: 자세 상태 (걷기 종료 시 서있음이 반영되도록)
     });
   },
 
@@ -1190,6 +1192,8 @@ const Game = {
     if (this.mode === "solo") i = 0;
     this._remoteRoam = null; // F1: 턴이 바뀌면 이전 프리롬 목표는 무효
     this._peerAnchor = null; // M3: 상대 스탠스도 초기화
+    this._peerAim = false;   // V1: 새 턴은 양쪽 다 탐색 자세부터
+    this._remoteAimTarget = null;
     this.aimBlocked = false;
     this.aimMode = false;    // M5: 새 턴은 탐색 모드부터
     if (this.activeIdx === i) return;
@@ -1395,6 +1399,8 @@ const Game = {
     this.state = "AIM";
     this.aimAngle = 0;
     this._peerAnchor = null;
+    this._peerAim = false;
+    this._remoteAimTarget = null;
     this.resetStanceAnchor(); // M1: 시작 스탠스 = 수구 뒤 기본 자리
     this.aimMode = false;     // M5: 탐색 모드부터 시작
     this.cueStick.visible = true;
@@ -1590,15 +1596,28 @@ const Game = {
       const D0 = 1.15 * 3.66;
       let s = null;
       if (this.mode === "online" && !this.isMyTurn()) {
-        // M3: 상대(활성) 캐릭터 — 수신한 걷기 종료 위치(_peerAnchor)로 같은 공식을 재현
+        // M3/V1: 상대(활성) 캐릭터 — 걷는 중엔 로밍이 관리, 탐색(서있음)이면 서서 대기,
+        // 조준 자세(k=1 또는 aim 수신)일 때만 스탠스 공식(_peerAnchor 기준)을 재현
         const rr = this._remoteRoam;
         if (rr && rr.m) return; // 걷는 중엔 updateRemoteRoam이 몸·큐를 관리
         c.remoteRoaming = false; // 걷기 애니메이션 잔상 제거
         const anchor = this._peerAnchor;
         s = anchor ? this.stanceFor(this.aimAngle, anchor) : null;
-        if (anchor && (!s || s.dist > this.MOVESHOT.STEP_R + 0.3)) {
-          // 상대가 사정거리 밖에 서 있음("이동 필요" 상태 미러링) — 서서 대기
-          this.standIdle(c, anchor.x, anchor.z);
+        const outOfReach = anchor && (!s || s.dist > this.MOVESHOT.STEP_R + 0.3);
+        if (!this._peerAim || outOfReach) {
+          // V1/V2: 탐색 모드(또는 사정거리 밖) — 마지막 위치로 부드럽게 수렴하며 서서 대기
+          const p = c.group.position;
+          const tx = anchor ? anchor.x : (rr ? rr.x : p.x);
+          const tz = anchor ? anchor.z : (rr ? rr.z : p.z);
+          const l = Math.min(1, (this._dt || 0.016) * 10);
+          p.x += (tx - p.x) * l;
+          p.z += (tz - p.z) * l;
+          if (rr) {
+            let dy = rr.yaw - c.group.rotation.y;
+            dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+            c.group.rotation.y += dy * l;
+          }
+          this.standIdle(c);
           return;
         }
         if (!s) { // 아직 걸은 적 없음 — 턴 시작 기본 자리 (양쪽이 같은 계산)
@@ -1614,7 +1633,19 @@ const Game = {
       c.aimDistU = s.d;
       c.aimExtra = s.d - D0;
       c.leanX = Math.min(c.aimExtra * 0.7, 1.4); // 딥 리닝 — 상체 기울임 최대 ~0.38m
-      this.character.position.set(s.x, -2.9, s.z);
+      if (this.mode === "online" && !this.isMyTurn()) {
+        // V2: 뷰어 — 스탠스 위치도 스냅 대신 수렴 (걷기→조준 전환 팝 제거)
+        const p = this.character.position;
+        if (Math.hypot(p.x - s.x, p.z - s.z) > 3) p.set(s.x, -2.9, s.z);
+        else {
+          const l = Math.min(1, (this._dt || 0.016) * 10);
+          p.x += (s.x - p.x) * l;
+          p.z += (s.z - p.z) * l;
+          p.y = -2.9;
+        }
+      } else {
+        this.character.position.set(s.x, -2.9, s.z);
+      }
       this.character.rotation.y = -this.aimAngle;
       this.updateGripArm(off - (cue.radius + 0.05));
     }
@@ -1764,18 +1795,8 @@ const Game = {
       cue.y - Math.sin(this.aimAngle) * D
     );
     this.stanceAnchor = { x: dest.x, z: dest.z };
-    this.startWalk(c, dest, -this.aimAngle, () => {
-      // M3: 자동 걸어가기는 로컬 걷기라 스트림이 없음 — 도착 지점만 상대에게 통지
-      if (this.mode === "online" && Net.active) {
-        Net.send({
-          t: "move",
-          x: Math.round(dest.x * 1000) / 1000,
-          z: Math.round(dest.z * 1000) / 1000,
-          yaw: Math.round(-this.aimAngle * 1000) / 1000,
-          m: false
-        });
-      }
-    });
+    // M3/V1: 자동 걸어가기는 로컬 걷기라 스트림이 없음 — 도착 지점·자세만 상대에게 통지
+    this.startWalk(c, dest, -this.aimAngle, () => this.sendStanceState());
   },
 
   /* ---------- M5: 스페이스바 조준 모드 ---------- */
@@ -1801,6 +1822,23 @@ const Game = {
         ? "🚶 이동 모드 — 조이스틱 이동, 🎯 버튼으로 다시 조준"
         : "🚶 이동 모드 — WASD 이동, Space로 다시 조준");
     }
+    this.sendStanceState(); // V1: 탐색↔조준 전환을 상대 화면에도 반영
+  },
+
+  // V1: 내 자세 상태(탐색 서있음/조준)와 위치를 상대에게 통지 — 상대 화면 미러링용
+  sendStanceState() {
+    if (this.mode !== "online" || !Net.active || !this.isMyTurn()) return;
+    const c = this.activeC;
+    if (!c) return;
+    const p = c.group.position;
+    Net.send({
+      t: "move",
+      x: Math.round(p.x * 1000) / 1000,
+      z: Math.round(p.z * 1000) / 1000,
+      yaw: Math.round(c.group.rotation.y * 1000) / 1000,
+      m: false,
+      k: this.aimMode ? 1 : 0
+    });
   },
 
   // 모바일용 🎯 버튼 표시/상태 (터치 기기 + 내 턴 조준 단계에만)
@@ -1821,7 +1859,8 @@ const Game = {
   // 서서 큐를 세워 든 대기 자세 (M1-3 "이동 필요" 상태 + 원격 미러링 공용)
   standIdle(c, x, z) {
     if (x !== undefined) c.group.position.set(x, -2.9, z);
-    c.poseBlend = 1;
+    // V3: 일어서기도 블렌딩 (매 프레임 호출되는 자세라 수렴형으로)
+    c.poseBlend = Math.min(1, c.poseBlend + (this._dt || 0.016) * 5);
     c.waistAng = 0;
     c.leanX = 0;
     c.bridgeTarget = null;
@@ -1959,6 +1998,7 @@ const Game = {
   // N0: 발사 공통 진입점 — 로컬 입력과 네트워크 수신 샷이 같은 경로를 탄다
   fireShot(p) {
     this.aimMode = false; // M5: 샷 후엔 탐색 모드부터
+    this._remoteAimTarget = null; // V2: 샷 각도는 정확히 스냅
     this.aimAngle = p.angle;
     this.setSpin(p.spinX, p.spinY);
     const speed = p.force * this.contactTime;
@@ -2479,6 +2519,7 @@ const Game = {
 
   /* ---------- 메인 업데이트 ---------- */
   update(dt) {
+    this._dt = dt; // V2/V3: 원격 보간·자세 블렌딩용 프레임 시간
     this.updateWalkers(dt);   // 걷는 캐릭터 이동 (H9)
     this.updateIdleChars(dt); // 대기 캐릭터는 어느 상태에서든 살아 움직임
     this.updateFreeRoam(dt);   // F0: 상대 턴 자유 이동 (내 캐릭터)
@@ -2546,6 +2587,12 @@ const Game = {
         }
         this.setGuideVisible(false);
         return;
+      }
+      // V2: 뷰어 — 수신한 조준 각도로 부드럽게 회전 (10Hz 스냅 → 지수 수렴)
+      if (this.mode === "online" && !this.isMyTurn() && Number.isFinite(this._remoteAimTarget)) {
+        let da = this._remoteAimTarget - this.aimAngle;
+        da = Math.atan2(Math.sin(da), Math.cos(da));
+        this.aimAngle += da * Math.min(1, dt * 12);
       }
       this.updateAimFromPointer();
       this.updateCueAim();
@@ -2683,6 +2730,8 @@ const Game = {
         if (!this.isMyTurn()) {
           this.updateAimFromPointer();
           this.updateCueAim();
+        } else {
+          this.sendStanceState(); // V1: 샷 끝 — 상대 화면에도 탐색 자세로 전환 통지
         }
       }
     }
@@ -2747,6 +2796,10 @@ const Game = {
           if (!msg.m && this.currentPlayer === 1 - this.myIdx) {
             this._peerAnchor = { x: msg.x, z: msg.z };
           }
+          // V1: 상대의 탐색(서있음)/조준 자세 상태
+          if ((msg.k === 0 || msg.k === 1) && this.currentPlayer === 1 - this.myIdx) {
+            this._peerAim = msg.k === 1;
+          }
         }
         break;
       case "emote": // E1: 상대의 이모트/빠른 채팅 — 상대 캐릭터 머리 위 말풍선
@@ -2772,7 +2825,8 @@ const Game = {
         break;
       case "aim": // 상대 조준 실시간 반영 (N3)
         if (this.mode === "online" && !this.isMyTurn() && this.state !== "ROLLING") {
-          this.aimAngle = msg.a;
+          this._peerAim = true;          // V1: aim 수신 = 상대가 조준 자세
+          this._remoteAimTarget = msg.a; // V2: 각도는 스냅 대신 부드럽게 수렴
           this.setSpin(msg.sx, msg.sy);
           if (msg.g > 0) {
             this.updateGauge(msg.g, this.forceMin + (this.forceMax - this.forceMin) * msg.g);
@@ -2784,6 +2838,7 @@ const Game = {
       case "shot": // 상대의 샷을 같은 물리로 재생 (N2)
         if (this.mode === "online" && !this.isMyTurn() && this.state !== "ROLLING") {
           if (msg.turn !== this.turnNo + 1) console.warn("샷 순번 불일치:", msg.turn, this.turnNo);
+          this._peerAim = true; // V1: 샷 = 조준 자세에서 재생
           this.fireShot(msg.p);
         }
         break;

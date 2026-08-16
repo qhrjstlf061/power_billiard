@@ -353,15 +353,16 @@ async function startServer() {
   rGuest.emit("msg", { t: "move", x: 8.5, z: -5.2, yaw: 1.1, m: true });
   const mv = (await gotMove);
   assert(mv.t === "move" && mv.x === 8.5, "대기 측 move가 릴레이돼야 함");
-  // M3(무빙 샷): 차례인 쪽(호스트)의 move도 릴레이됨 — 조준 자리 잡기
+  // M3(무빙 샷): 차례인 쪽(호스트)의 move도 릴레이됨 — 조준 자리 잡기 (V1: k = 자세 상태)
   const gotMove2 = once(rGuest, "msg");
-  rHost.emit("msg", { t: "move", x: -7.1, z: 2.4, yaw: 0.5, m: false });
+  rHost.emit("msg", { t: "move", x: -7.1, z: 2.4, yaw: 0.5, m: false, k: 1 });
   const mv2 = (await gotMove2);
-  assert(mv2.t === "move" && mv2.m === false, "차례인 쪽 move도 릴레이돼야 함 (무빙 샷)");
-  // 범위 밖 좌표 차단
+  assert(mv2.t === "move" && mv2.m === false && mv2.k === 1, "차례인 쪽 move(k 포함)가 릴레이돼야 함");
+  // 범위 밖 좌표·잘못된 k 차단
   await expectDrop(() => rGuest.emit("msg", { t: "move", x: 50, z: 0, yaw: 0, m: true }), rHost, "범위 밖 move");
+  await expectDrop(() => rHost.emit("msg", { t: "move", x: 0, z: -6, yaw: 0, m: false, k: 5 }), rGuest, "잘못된 k");
   rHost.emit("leave"); rGuest.emit("leave");
-  log("24. 무빙 샷 move OK — 양쪽 모두 릴레이, 범위 밖 차단");
+  log("24. 무빙 샷 move OK — 양쪽 릴레이 + k(자세) 필드, 범위 밖·잘못된 k 차단");
 
   /* ========== E1: 이모트·빠른 채팅 ========== */
   const eHost = io(URL);
