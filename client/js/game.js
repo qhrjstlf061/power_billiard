@@ -1306,6 +1306,7 @@ const Game = {
   // 카메라를 캐릭터의 눈 관절에 붙인다. 눈 높이는 리그의 poseBlend(조준 1.13m ↔ 기립 1.64m)를
   // 그대로 따라가므로, 조준 모드에 들어가면 시점이 테이블 높이로 자연스럽게 내려간다(V3 블렌딩 재사용).
   FPV: {
+    fov: 75,            // 1인칭 시야각(수직) — 3인칭 45보다 넓게, 16:9에서 수평 약 108°
     eyeFwd: 0.22,       // 눈에서 시선 방향으로 전진 — 목·어깨 메시가 화면을 가리지 않게
     lookSens: 0.0032,   // 우클릭 드래그 둘러보기 감도 (rad/px)
     aimSens: 0.0016,    // 조준 좌우 감도 (rad/px) — 진입 시점 기준 오프셋
@@ -1343,7 +1344,7 @@ const Game = {
     this.fpv = on;
     this.controls.enabled = !on;
     this.camera.near = on ? 0.05 : 0.1; // 자기 몸이 잘리지 않게
-    this.camera.fov = on ? 62 : 45;
+    this.camera.fov = on ? this.FPV.fov : 45;
     this.camera.updateProjectionMatrix();
     if (on) {
       const c = this.fpvChar();
