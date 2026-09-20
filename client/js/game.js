@@ -1078,10 +1078,13 @@ const Game = {
         if (this.roamAllowedPos(p.x, tz, p.x, p.z)) p.z = tz;
 
         // 이동 방향으로 부드럽게 회전 (로컬 +X가 정면)
-        const targetYaw = Math.atan2(-mz, mx);
-        let dy = targetYaw - c.group.rotation.y;
-        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-        c.group.rotation.y += dy * Math.min(1, dt * 10);
+        // P1-2: FPV에선 몸이 "보는 방향"을 향하므로 이동 방향 회전을 쓰지 않는다
+        if (!(this.fpv && c === this.fpvChar())) {
+          const targetYaw = Math.atan2(-mz, mx);
+          let dy = targetYaw - c.group.rotation.y;
+          dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+          c.group.rotation.y += dy * Math.min(1, dt * 10);
+        }
         moving = true;
       }
     }
@@ -1299,7 +1302,125 @@ const Game = {
     }
   },
 
+  /* ---------- P0/P1: 1인칭 시점 (FPV) ---------- */
+  // 카메라를 캐릭터의 눈 관절에 붙인다. 눈 높이는 리그의 poseBlend(조준 1.13m ↔ 기립 1.64m)를
+  // 그대로 따라가므로, 조준 모드에 들어가면 시점이 테이블 높이로 자연스럽게 내려간다(V3 블렌딩 재사용).
+  FPV: {
+    eyeFwd: 0.22,       // 눈에서 시선 방향으로 전진 — 목·어깨 메시가 화면을 가리지 않게
+    lookSens: 0.0032,   // 우클릭 드래그 둘러보기 감도 (rad/px)
+    aimSens: 0.0016,    // 조준 좌우 감도 (rad/px) — 진입 시점 기준 오프셋
+    pitchMin: -1.1, pitchMax: 0.55,
+    standPitch: -0.28,  // 탐색 모드 기본 내려보기
+    aimAhead: 3.0       // 조준 시 수구보다 이만큼 앞을 바라봄 (유닛)
+  },
+  fpv: false,
+  fpvYaw: 0,            // 탐색 모드에서 보는 방향 (= 캐릭터 group.rotation.y)
+  fpvPitch: -0.28,
+
+  // 1인칭의 주인: 온라인은 항상 나(상대 턴엔 돌아다니는 내 캐릭터), 로컬은 현재 차례인 사람
+  fpvChar() {
+    return this.mode === "online" ? this.chars[this.myIdx] : this.activeC;
+  },
+
+  // 조준 구도로 볼 조건 — 내가 큐를 잡고 있는 동안 (충전·공 굴러가는 중 포함)
+  fpvAimView() {
+    const c = this.fpvChar();
+    if (!c || c !== this.activeC || c.walk || c.roaming) return false;
+    return this.state === "CHARGE" || this.state === "ROLLING"
+      || (this.state === "AIM" && this.aimMode);
+  },
+
+  // 1인칭에서 자기 머리·눈은 화면을 가리므로 숨긴다 (몸통·팔·큐는 보여야 몰입)
+  setHeadVisible(c, v) {
+    if (!c || !c.rig) return;
+    c.rig.orbs.forEach(o => {
+      if (o.j === "head" || o.j === "eyeL" || o.j === "eyeR") o.mesh.visible = v;
+    });
+  },
+
+  setFpv(on) {
+    if (this.fpv === on) return;
+    this.fpv = on;
+    this.controls.enabled = !on;
+    this.camera.near = on ? 0.05 : 0.1; // 자기 몸이 잘리지 않게
+    this.camera.fov = on ? 62 : 45;
+    this.camera.updateProjectionMatrix();
+    if (on) {
+      const c = this.fpvChar();
+      if (c) this.fpvYaw = c.group.rotation.y;
+      this.fpvPitch = this.FPV.standPitch;
+      this.captureFpvAimBase();
+    } else {
+      this.chars.forEach(c => this.setHeadVisible(c, true)); // 머리 복구
+    }
+  },
+
+  // FPV에선 카메라가 조준각을 따라 돌기 때문에 "마우스가 가리킨 테이블 지점"을 그대로 각도로 쓰면
+  // 조준→카메라 회전→조준이 계속 밀리는 되먹임이 생긴다. 진입 시점 기준 오프셋이라 안정적.
+  captureFpvAimBase() {
+    this._fpvAimBase = { angle: this.aimAngle, px: this.pointer.x };
+  },
+
+  // P1-1: 우클릭 드래그 둘러보기 (조준 중에는 마우스가 조준을 맡으므로 비활성)
+  fpvLook(dx, dy) {
+    if (!this.fpv || this.fpvAimView()) return;
+    const F = this.FPV;
+    this.fpvYaw -= dx * F.lookSens; // 오른쪽으로 드래그 = 오른쪽을 봄
+    this.fpvPitch = Math.max(F.pitchMin, Math.min(F.pitchMax, this.fpvPitch - dy * F.lookSens));
+  },
+
+  // 매 프레임 렌더 직전(refreshRig 이후)에 카메라를 눈 위치로 옮긴다
+  updateFpvCamera() {
+    const c = this.fpvChar();
+    if (!c || !c.group.visible) return;
+    this.chars.forEach(o => this.setHeadVisible(o, o !== c)); // 대상이 바뀔 수 있어 매 프레임 정리
+
+    const aiming = this.fpvAimView();
+    // P1-2: 탐색 모드에선 몸이 "보는 방향"을 향한다 (1인칭에서 이동 방향 회전은 어지럽다)
+    if (!aiming && !c.walk) {
+      c.group.rotation.y = this.fpvYaw;
+      this.holdCueVertical(c);
+    } else if (c.walk) {
+      this.fpvYaw = c.group.rotation.y; // 턴 교대 걷기는 걷기 컨트롤러가 주인
+    }
+
+    // 눈 위치 = 양쪽 눈 관절의 중점 (리그가 자세에 맞춰 이미 배치해 둠)
+    const eye = new THREE.Vector3();
+    let n = 0;
+    c.rig.orbs.forEach(o => {
+      if (o.j === "eyeL" || o.j === "eyeR") {
+        eye.add(o.mesh.getWorldPosition(new THREE.Vector3()));
+        n++;
+      }
+    });
+    if (!n) return;
+    eye.divideScalar(n);
+
+    const th = c.group.rotation.y;
+    const fwd = new THREE.Vector3(Math.cos(th), 0, -Math.sin(th)); // 로컬 +X = 정면
+    this.camera.position.copy(eye).addScaledVector(fwd, this.FPV.eyeFwd);
+
+    if (aiming) {
+      // 큐 라인을 따라 수구 너머를 바라봄 — 실제 사이팅 구도
+      const cue = this.balls[this.cueIndex];
+      this.camera.lookAt(
+        cue.x + Math.cos(this.aimAngle) * this.FPV.aimAhead,
+        BALL_R,
+        cue.y + Math.sin(this.aimAngle) * this.FPV.aimAhead
+      );
+    } else {
+      const cp = Math.cos(this.fpvPitch);
+      this.camera.lookAt(
+        this.camera.position.x + fwd.x * cp,
+        this.camera.position.y + Math.sin(this.fpvPitch),
+        this.camera.position.z + fwd.z * cp
+      );
+    }
+  },
+
   setCameraView(mode) {
+    this.setFpv(mode === "fpv");
+    if (mode === "fpv") return; // 카메라는 updateFpvCamera가 매 프레임 관리
     if (mode === "top") {
       this.camera.position.set(0, 13, 0.01);
     } else {
@@ -1539,13 +1660,24 @@ const Game = {
     if (this.activeC && this.activeC.roaming) return;
     if (this.aimBlocked) return;
     if (!this.aimMode) return; // M5: 조준 모드에서만 마우스가 각도를 움직임
-    const p = this.pointerToTable(this.pointer.x, this.pointer.y);
-    if (!p) return;
-    const cue = this.balls[this.cueIndex];
-    const dx = p.x - cue.x, dz = p.z - cue.y;
-    if (Math.hypot(dx, dz) < 0.02) return;
-    const desired = Math.atan2(dz, dx);
+    let desired;
+    if (this.fpv) {
+      // P1-3: FPV는 조준 모드 진입 시점 기준 좌우 오프셋 (카메라가 조준각을 따라 도는 되먹임 방지)
+      const b = this._fpvAimBase || (this._fpvAimBase = { angle: this.aimAngle, px: this.pointer.x });
+      desired = b.angle + (this.pointer.x - b.px) * this.FPV.aimSens;
+    } else {
+      const p = this.pointerToTable(this.pointer.x, this.pointer.y);
+      if (!p) return;
+      const cue = this.balls[this.cueIndex];
+      const dx = p.x - cue.x, dz = p.z - cue.y;
+      if (Math.hypot(dx, dz) < 0.02) return;
+      desired = Math.atan2(dz, dx);
+    }
+    this.applyAimDesired(desired);
+  },
 
+  // 목표 각도를 스탠스 콘(M1) 안으로 클램프해 적용 — 3인칭·FPV 공통
+  applyAimDesired(desired) {
     // H11-2/M1: 설 수 없는 방향은 조준이 경계에서 막힘.
     // 코스 스캔(0.02)으로 막히는 띠를 찾되, 경계각 자체는 이분 탐색으로 정밀하게 —
     // 예전엔 0.02rad 스텝에 양자화돼 경계에서 조준이 뚝뚝 끊겼음
@@ -1894,6 +2026,7 @@ const Game = {
       return;
     }
     this.aimMode = !this.aimMode;
+    if (this.aimMode) this.captureFpvAimBase(); // P1-3: FPV 조준 기준점
     if (this.aimMode) {
       this.showToast(this.isTouch
         ? "🎯 조준 모드 — 화면을 눌러 조준, 꾹 눌러 발사 (🎯 버튼으로 해제)"
@@ -2836,7 +2969,9 @@ const Game = {
       mesh.material.emissiveIntensity = this.flash[i] * 1.5;
     });
 
-    this.controls.update();
+    // P0: FPV는 OrbitControls가 카메라 위치를 덮어쓰므로 update()를 건너뛴다
+    if (this.fpv) this.updateFpvCamera();
+    else this.controls.update();
     this.renderer.render(this.scene, this.camera);
   },
 
@@ -3148,6 +3283,7 @@ const Game = {
       this.pointer.x = e.clientX;
       this.pointer.y = e.clientY;
       if (e.button === 0) {
+        if (this.fpv && this.aimMode) this.captureFpvAimBase(); // 누른 지점 기준으로 재설정
         if (this.state === "AIM") this.updateAimFromPointer(); // 터치: 누른 지점으로 즉시 조준
         this.beginCharge();
       } else if (e.button === 2) {
@@ -3233,13 +3369,36 @@ const Game = {
     joyEl.addEventListener("pointercancel", endJoy);
     dom.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // P1-1: FPV 둘러보기 — 우클릭 드래그 (OrbitControls의 우클릭 회전과 같은 조작감)
+    let lookDrag = null;
+    dom.addEventListener("pointerdown", (e) => {
+      if (e.button === 2 && this.fpv) lookDrag = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!lookDrag) return;
+      this.fpvLook(e.clientX - lookDrag.x, e.clientY - lookDrag.y);
+      lookDrag.x = e.clientX;
+      lookDrag.y = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { lookDrag = null; });
+    window.addEventListener("pointercancel", () => { lookDrag = null; });
+
     // 시점 토글: 기본 ↔ 탑뷰 (버튼 라벨은 "전환하면 보게 될 시점")
     const viewBtn = document.getElementById("btn-view");
+    const VIEWS = ["default", "top", "fpv"];
+    const VIEW_LABEL = { default: "기본 시점", top: "탑뷰", fpv: "1인칭" };
     this.viewMode = "default";
     viewBtn.addEventListener("click", () => {
-      this.viewMode = this.viewMode === "default" ? "top" : "default";
+      const i = VIEWS.indexOf(this.viewMode);
+      this.viewMode = VIEWS[(i + 1) % VIEWS.length];
       this.setCameraView(this.viewMode);
-      viewBtn.textContent = this.viewMode === "default" ? "탑뷰" : "기본 시점";
+      // 라벨은 "전환하면 보게 될 다음 시점"
+      viewBtn.textContent = VIEW_LABEL[VIEWS[(VIEWS.indexOf(this.viewMode) + 1) % VIEWS.length]];
+      if (this.viewMode === "fpv") {
+        this.showToast(this.isTouch
+          ? "👁️ 1인칭 — 화면을 끌어 둘러보기"
+          : "👁️ 1인칭 — 우클릭 드래그로 둘러보기");
+      }
     });
     document.getElementById("btn-reset").addEventListener("click", () => this.requestRematch());
     // M7: 게임 중 ☰ = 일시 정지 화면 (재개 / 메뉴로 가기)
