@@ -1310,8 +1310,10 @@ const Game = {
 
   /* ---------- 차징 줌아웃 — 힘을 모을수록 시야가 넓어진다 ---------- */
   CHARGE_ZOOM: {
-    fovAdd: 14,    // 1인칭: 최대 충전에서 더해지는 수직 FOV
-    distMul: 0.38  // 3인칭: 최대 충전에서 카메라 거리 배수 (+38%)
+    // 1인칭 FOV 펌핑(다이내믹 FOV)은 화면 전체가 늘었다 줄었다 하며 멀미를 크게 유발해서 껐다.
+    // 1인칭은 카메라를 뒤로 뺄 수도 없어(자기 몸 뒤통수가 보임) 충전 중 시야를 고정한다.
+    fovAdd: 0,     // 1인칭: 최대 충전에서 더해지는 수직 FOV (0 = 고정 권장)
+    distMul: 0.2   // 3인칭: 최대 충전에서 카메라 거리 배수 (+20%, 위치 변화라 멀미 영향 적음)
   },
   chargeZoomT: 0,  // 0~1로 부드럽게 따라가는 충전량
 
@@ -1324,6 +1326,7 @@ const Game = {
     const t = this.chargeZoomT;
 
     if (this.fpv) {
+      if (!this.CHARGE_ZOOM.fovAdd) return; // 시야 고정 — 멀미 방지
       const want = this.FPV.fov + this.CHARGE_ZOOM.fovAdd * t;
       if (Math.abs(this.camera.fov - want) > 1e-3) {
         this.camera.fov = want;
