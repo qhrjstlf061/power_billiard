@@ -3386,14 +3386,16 @@ const Game = {
     // 시점 토글: 기본 ↔ 탑뷰 (버튼 라벨은 "전환하면 보게 될 시점")
     const viewBtn = document.getElementById("btn-view");
     const VIEWS = ["default", "top", "fpv"];
-    const VIEW_LABEL = { default: "기본 시점", top: "탑뷰", fpv: "1인칭" };
+    // 라벨은 "지금 보고 있는 시점" — 예전엔 "다음 시점"을 표시해서
+    // 탑뷰인데 버튼에 1인칭이라 적히는 등 뒤바뀐 것처럼 보였다
+    const VIEW_LABEL = { default: "🎥 기본", top: "⬇️ 탑뷰", fpv: "👁️ 1인칭" };
     this.viewMode = "default";
+    viewBtn.textContent = VIEW_LABEL[this.viewMode];
     viewBtn.addEventListener("click", () => {
       const i = VIEWS.indexOf(this.viewMode);
       this.viewMode = VIEWS[(i + 1) % VIEWS.length];
       this.setCameraView(this.viewMode);
-      // 라벨은 "전환하면 보게 될 다음 시점"
-      viewBtn.textContent = VIEW_LABEL[VIEWS[(VIEWS.indexOf(this.viewMode) + 1) % VIEWS.length]];
+      viewBtn.textContent = VIEW_LABEL[this.viewMode];
       if (this.viewMode === "fpv") {
         this.showToast(this.isTouch
           ? "👁️ 1인칭 — 화면을 끌어 둘러보기"
