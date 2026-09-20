@@ -316,6 +316,9 @@ const Game = {
       toonMat({ color: 0x257040 })
     );
     felt.rotation.x = -Math.PI / 2;
+    // 밑판 윗면도 y=0이라 정확히 같은 평면이 되면 z-파이팅으로 초록 위에 갈색이 비친다 →
+    // 펠트만 아주 살짝(3mm 상당) 띄워 분리. 물리는 2D라 영향 없음
+    felt.position.y = 0.006;
     felt.receiveShadow = true;
     this.tableGroup.add(felt);
 
@@ -396,7 +399,10 @@ const Game = {
     this.tableGroup.add(base);
 
     const legT = 0.55;
-    const legH = -FLOOR_Y - baseH;
+    // 다리 밑동이 바닥 평면과 정확히 같은 높이면 z-파이팅이 난다 → 바닥 아래로 살짝 묻는다
+    // (카메라는 항상 바닥 위에 있으므로 묻힌 부분은 보이지 않는다)
+    const LEG_SINK = 0.08;
+    const legH = -FLOOR_Y - baseH + LEG_SINK;
     [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(([sx, sz]) => {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(legT, legH, legT), railMat);
       leg.position.set(sx * (tableW / 2 - 0.7), -baseH - legH / 2, sz * (tableD / 2 - 0.4));
