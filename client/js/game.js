@@ -1308,6 +1308,41 @@ const Game = {
     }
   },
 
+  /* ---------- 차징 줌아웃 — 힘을 모을수록 시야가 넓어진다 ---------- */
+  CHARGE_ZOOM: {
+    fovAdd: 14,    // 1인칭: 최대 충전에서 더해지는 수직 FOV
+    distMul: 0.38  // 3인칭: 최대 충전에서 카메라 거리 배수 (+38%)
+  },
+  chargeZoomT: 0,  // 0~1로 부드럽게 따라가는 충전량
+
+  updateChargeZoom(dt) {
+    const frac = this.charging ? Math.min(1, this.charging.t / this.chargeDuration) : 0;
+    const prev = this.chargeZoomT || 0;
+    // 당길 땐 빠르게 따라붙고, 발사 후엔 천천히 제자리로
+    this.chargeZoomT = prev + (frac - prev) * Math.min(1, dt * (frac > prev ? 14 : 6));
+    if (this.chargeZoomT < 1e-3) this.chargeZoomT = 0;
+    const t = this.chargeZoomT;
+
+    if (this.fpv) {
+      const want = this.FPV.fov + this.CHARGE_ZOOM.fovAdd * t;
+      if (Math.abs(this.camera.fov - want) > 1e-3) {
+        this.camera.fov = want;
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+    // 3인칭: 궤도 반경을 늘린다 — OrbitControls는 매 프레임 카메라 위치에서 반경을 다시 읽으므로
+    // 여기서 옮겨 두면 update()가 그 값을 이어받는다 (min/maxDistance로 알아서 클램프됨)
+    if (!t) { this._camBaseDist = null; return; }
+    const off = this.camera.position.clone().sub(this.controls.target);
+    const d = off.length();
+    if (!d) return;
+    if (!this._camBaseDist) this._camBaseDist = d; // 충전 시작 시점의 거리를 기준으로
+    const want = Math.min(this.controls.maxDistance,
+      this._camBaseDist * (1 + this.CHARGE_ZOOM.distMul * t));
+    this.camera.position.copy(this.controls.target).addScaledVector(off.divideScalar(d), want);
+  },
+
   /* ---------- P0/P1: 1인칭 시점 (FPV) ---------- */
   // 카메라를 캐릭터의 눈 관절에 붙인다. 눈 높이는 리그의 poseBlend(조준 1.13m ↔ 기립 1.64m)를
   // 그대로 따라가므로, 조준 모드에 들어가면 시점이 테이블 높이로 자연스럽게 내려간다(V3 블렌딩 재사용).
@@ -2752,6 +2787,7 @@ const Game = {
     this.updateSocialUI();
 
     this.updateAimToggleBtn(); // M5: 모바일 🎯 버튼 표시 갱신
+    this.updateChargeZoom(dt); // 차징할수록 줌아웃
     this.updateShotClock(dt);  // S0: 샷 클록 (AIM/CHARGE에서만 감소, MENU/ROLLING은 숨김)
 
     // M2: 수구 사정거리 링 — 내 턴 조준 단계에만 (색 = 현재 자리에서 칠 수 있는지)
